@@ -1,5 +1,5 @@
 // Copyright (C) 2026 nohuto
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX License Identifier: AGPL-3.0-or-later
 
 // each resource type has its own invalid value
 
@@ -48,7 +48,7 @@ class UniqueResource
     {
         return value_;
     }
-    // closes the current value, for APIs that return a new one through an out parameter
+    // closes the current handle before an API writes a new one through an out parameter
     value_type* put() noexcept
     {
         reset();
@@ -75,58 +75,50 @@ class UniqueResource
     value_type value_ = Traits::invalid();
 };
 
-// CreateEvent, CreateThread, OpenThread and OpenProcess return NULL on failure
-// INVALID_HANDLE_VALUE is also the current process pseudo handle, which must never be closed
-struct KernelHandleTraits
+namespace detail
+{
+
+template <BOOL(WINAPI* Close)(HANDLE)>
+struct HandleTraitsBase
 {
     using type = HANDLE;
+    static bool valid(HANDLE handle) noexcept
+    {
+        return handle != nullptr && handle != INVALID_HANDLE_VALUE;
+    }
+    static void close(HANDLE handle) noexcept
+    {
+        Close(handle);
+    }
+};
+
+} // namespace detail
+
+// CreateEvent, CreateThread, OpenThread and OpenProcess fail with NULL
+// INVALID_HANDLE_VALUE also names the current process pseudo handle, which must never be closed
+struct KernelHandleTraits : detail::HandleTraitsBase<CloseHandle>
+{
     static HANDLE invalid() noexcept
     {
         return nullptr;
     }
-    static bool valid(HANDLE handle) noexcept
-    {
-        return handle != nullptr && handle != INVALID_HANDLE_VALUE;
-    }
-    static void close(HANDLE handle) noexcept
-    {
-        CloseHandle(handle);
-    }
 };
 
 // CreateFile returns INVALID_HANDLE_VALUE on failure
-struct FileHandleTraits
+struct FileHandleTraits : detail::HandleTraitsBase<CloseHandle>
 {
-    using type = HANDLE;
     static HANDLE invalid() noexcept
     {
         return INVALID_HANDLE_VALUE;
-    }
-    static bool valid(HANDLE handle) noexcept
-    {
-        return handle != nullptr && handle != INVALID_HANDLE_VALUE;
-    }
-    static void close(HANDLE handle) noexcept
-    {
-        CloseHandle(handle);
     }
 };
 
-// FindFirstFile returns INVALID_HANDLE_VALUE on failure and is closed with FindClose
-struct FindHandleTraits
+// FindFirstFile fails with INVALID_HANDLE_VALUE and needs FindClose
+struct FindHandleTraits : detail::HandleTraitsBase<FindClose>
 {
-    using type = HANDLE;
     static HANDLE invalid() noexcept
     {
         return INVALID_HANDLE_VALUE;
-    }
-    static bool valid(HANDLE handle) noexcept
-    {
-        return handle != nullptr && handle != INVALID_HANDLE_VALUE;
-    }
-    static void close(HANDLE handle) noexcept
-    {
-        FindClose(handle);
     }
 };
 
@@ -165,7 +157,7 @@ struct GdiObjectTraits
     }
 };
 
-// memory a Win32 API allocated with LocalAlloc, FormatMessage with FORMAT_MESSAGE_ALLOCATE_BUFFER for example
+// LocalAlloc memory, including FormatMessage with FORMAT_MESSAGE_ALLOCATE_BUFFER
 template <typename T>
 struct LocalMemoryTraits
 {
@@ -184,7 +176,7 @@ struct LocalMemoryTraits
     }
 };
 
-// memory a COM API allocated with CoTaskMemAlloc, IShellItem::GetDisplayName for example
+// CoTaskMemAlloc memory, including IShellItem::GetDisplayName results
 template <typename T>
 struct CoTaskMemoryTraits
 {
@@ -200,6 +192,25 @@ struct CoTaskMemoryTraits
     static void close(T memory) noexcept
     {
         CoTaskMemFree(memory);
+    }
+};
+
+// handles without built in traits, null is empty, Close frees the handle
+template <typename T, typename Close>
+struct NullableTraits
+{
+    using type = T;
+    static T invalid() noexcept
+    {
+        return T{};
+    }
+    static bool valid(T value) noexcept
+    {
+        return value != T{};
+    }
+    static void close(T value) noexcept
+    {
+        Close{}(value);
     }
 };
 
@@ -220,12 +231,15 @@ using UniqueLocal = UniqueResource<LocalMemoryTraits<T>>;
 template <typename T>
 using UniqueCoTask = UniqueResource<CoTaskMemoryTraits<T>>;
 
-// CoUninitialize only after a successful CoInitializeEx, S_FALSE counts as success
+template <typename T, typename Close>
+using UniqueNullable = UniqueResource<NullableTraits<T, Close>>;
+
+// call CoUninitialize only after successful CoInitializeEx, S_FALSE is success
 class ComInit
 {
   public:
-    explicit ComInit(DWORD flags = COINIT_APARTMENTTHREADED) noexcept
-        : hr_(CoInitializeEx(nullptr, flags))
+    ComInit() noexcept
+        : hr_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))
     {
     }
     ~ComInit()

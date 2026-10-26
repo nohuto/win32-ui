@@ -1,5 +1,5 @@
 // Copyright (C) 2026 nohuto
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX License Identifier: AGPL-3.0-or-later
 
 #pragma once
 
@@ -8,21 +8,21 @@
 namespace win32ui
 {
 
-// an export newer than the build's Windows target, null when the module or the export is missing
+// export newer than the Windows build target, null if module or export is missing
 template <typename Fn>
 Fn ImportProc(HMODULE module, const char* name) noexcept
 {
     return module ? reinterpret_cast<Fn>(GetProcAddress(module, name)) : nullptr;
 }
 
-// the module must already be loaded
+// module must already be loaded
 template <typename Fn>
 Fn ImportProc(const wchar_t* module, const char* name) noexcept
 {
     return ImportProc<Fn>(GetModuleHandleW(module), name);
 }
 
-// RtlGetVersion avoids the manifest dependency of GetVersionEx, zero means unknown
+// RtlGetVersion avoids GetVersionEx manifest dependency, zero means unknown
 inline const RTL_OSVERSIONINFOW& OsVersion() noexcept
 {
     static const RTL_OSVERSIONINFOW version = [] {

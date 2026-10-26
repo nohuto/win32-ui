@@ -1,3 +1,3 @@
 # win32-ui
 
-Static C++ library for Win32 GUI projects.
+Static C++ library for my win32 GUI projects
