@@ -15,7 +15,7 @@ namespace win32ui
 // app icon size in DIPs
 inline constexpr int kIconDip = 16;
 
-// dpi 0 uses system DPI, never scales below original size
+// dpi 0 uses system DPI
 int ScaleForDpi(int size, UINT dpi);
 HICON LoadIconResource(int resource_id, UINT dpi);
 HICON LoadIconFromFile(const std::wstring& path, UINT dpi);

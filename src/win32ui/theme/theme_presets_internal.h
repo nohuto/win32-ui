@@ -38,7 +38,7 @@ inline constexpr ColorField kColorFields[] = {
 
 bool EqualName(std::wstring_view left, std::wstring_view right);
 
-// writes thirteen color keys with CRLF, parser restores built in error color from dark
+// writes thirteen color keys with CRLF
 std::wstring FormatThemePresets(const std::vector<ThemePreset>& presets);
 std::wstring FormatThemeColor(COLORREF color);
 bool ParseThemeColor(std::wstring_view text, COLORREF* color);

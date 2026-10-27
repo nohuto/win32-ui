@@ -10,12 +10,11 @@
 namespace win32ui
 {
 
-// dialog list custom draw, app colors without hot or focus effects, native selection, then grid
-// returns false for notifications from other lists
 bool DrawDialogListView(NMHDR* header, LRESULT* result);
-// defaults passed to SetListColumns, restored by Reset columns
 void ResetListColumns(HWND list);
-// subitem at column, or -1 if missing
-int ColumnSubItem(HWND list, int column);
+// subitem shown at a header position
+int ColumnSubItem(HWND list, int position);
+// sort arrow for a column while it is hidden
+void RecordListSort(HWND list, int subitem, int bits);
 
 } // namespace win32ui

@@ -214,13 +214,6 @@ ThemePresetError WriteText(const std::wstring& path, const std::wstring& content
     return ThemePresetError::write_failed;
 }
 
-// old built in colors identify unchanged saved presets for updates
-// keep old palettes here when changing built ins, or saved copies become user presets
-constexpr BuiltInPreset kEarlierBuiltInPresets[] = {
-    {L"Default Dark", true, {RGB(20, 20, 20), RGB(20, 20, 20), RGB(34, 34, 34), RGB(14, 14, 14), RGB(34, 34, 34), RGB(66, 66, 66), RGB(200, 200, 200), RGB(170, 170, 170), RGB(90, 162, 255), RGB(20, 20, 20), RGB(200, 200, 200), RGB(44, 44, 44), RGB(90, 162, 255)}},
-    {L"Default Light", false, {RGB(245, 245, 245), RGB(255, 255, 255), RGB(242, 242, 242), RGB(235, 235, 235), RGB(242, 242, 242), RGB(204, 204, 204), RGB(32, 32, 32), RGB(96, 96, 96), RGB(0, 120, 215), RGB(255, 255, 255), RGB(32, 32, 32), RGB(236, 236, 236), RGB(0, 120, 215)}},
-};
-
 // persist thirteen colors and dark flag, rebuild error color from the flag
 bool SameSavedColors(const ThemeColors& colors, bool dark, const ThemeColors& saved)
 {
@@ -265,7 +258,6 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
     presets->clear();
     ThemePreset current;
     current.colors.dark = true;
-    current.colors.field = CLR_INVALID;
     int section_line = 0;
     const auto fail = [&](ThemePresetError error, int line) {
         presets->clear();
@@ -279,10 +271,6 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
         if (current.name.empty())
         {
             return false;
-        }
-        if (current.colors.field == CLR_INVALID)
-        {
-            current.colors.field = current.colors.surface;
         }
         current.colors.error = BuiltInThemeColors(current.colors.dark).error;
         presets->push_back(current);
@@ -301,7 +289,6 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
             }
             current = {};
             current.colors.dark = true;
-            current.colors.field = CLR_INVALID;
             section_line = line_number;
         }
         else if (section_line != 0 && !line.empty())
@@ -386,8 +373,7 @@ bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& a
         {
             continue;
         }
-        const bool earlier = std::ranges::any_of(kEarlierBuiltInPresets, [&](const BuiltInPreset& old) { return EqualName(old.name, builtin.name) && SameSavedColors(old.colors, old.dark, found->colors); });
-        if (current || earlier)
+        if (current)
         {
             *found = builtin;
             changed = true;

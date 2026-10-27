@@ -12,7 +12,7 @@ namespace win32ui
 {
 
 void SetComboItems(HWND combo, const std::vector<std::wstring>& items);
-// width needed for the widest item and arrow, or 0 when empty
+// width needed for the widest item and arrow, 0 when empty
 int ComboFitWidth(HWND combo);
 // sizes the open list to its widest item, at least as wide as the combo box
 void FitDroppedWidth(HWND combo);

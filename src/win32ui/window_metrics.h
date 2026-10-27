@@ -10,11 +10,9 @@ namespace win32ui
 
 UINT DpiForWindow(HWND window);
 
-// synthetic layout DPI, 0 disables it, changes layout and fonts without changing process DPI context
 void SetDpiOverride(UINT dpi);
 UINT DpiOverride();
 
-// window DPI, overridden by synthetic layout DPI when set
 UINT WindowDpi(HWND hwnd);
 inline int Scale(int dip, UINT dpi)
 {

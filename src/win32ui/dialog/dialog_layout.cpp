@@ -179,7 +179,7 @@ void MatchComboHeight(HWND combo, HWND edit)
     SendMessageW(combo, CB_SETITEMHEIGHT, static_cast<WPARAM>(-1), (edit_rect.bottom - edit_rect.top) - frame);
 }
 
-// theme and font changes remeasure combo height, so match it again afterward
+// theme and font changes remeasure combo height, so match it again afterwards
 LRESULT CALLBACK ComboHeightProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR id, DWORD_PTR data)
 {
     if (message == WM_NCDESTROY)

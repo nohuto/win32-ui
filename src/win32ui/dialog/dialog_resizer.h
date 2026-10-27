@@ -24,7 +24,6 @@ struct AnchorRule
     unsigned anchors = kAnchorLeft | kAnchorTop;
 };
 
-// anchors controls during resize, positions use pixels at the Attach DPI until Rescale
 class DialogResizer
 {
   public:

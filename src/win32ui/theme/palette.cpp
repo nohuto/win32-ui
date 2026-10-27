@@ -24,12 +24,11 @@ struct PaletteState
     ThemeMode mode = ThemeMode::system;
     ThemeColors custom = kDark;
     ThemeColors colors = kDark;
-    // dark and custom status bars paint themselves, mode changes alone can affect them
+    // dark and custom status bars paint themselves
     bool bar_custom = false;
     bool initialized = false;
-    // last dark flag sent to uxtheme, -1 before first call
+    // last dark flag sent to uxtheme
     int app_dark = -1;
-    // keep previous ThemeFill brushes alive for controls still using earlier WM_CTLCOLOR results
     std::array<UniqueBrush, 5> brushes;
     std::array<UniqueBrush, 5> retired;
 };
@@ -73,7 +72,7 @@ void SetAppDark(bool dark)
 
 bool SystemPrefersDark()
 {
-    // missing values mean light
+    // missing values = light
     DWORD value = 1;
     DWORD size = sizeof(value);
     return RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS && value == 0;
@@ -179,7 +178,6 @@ bool ThemeMessage(UINT message, LPARAM lparam)
         const auto* area = reinterpret_cast<const wchar_t*>(lparam);
         relevant = area && (_wcsicmp(area, L"ImmersiveColorSet") == 0 || _wcsicmp(area, L"WindowsThemeElement") == 0);
     }
-    // reentrant WM_THEMECHANGED from SetWindowTheme sees no theme change
     return relevant && Refresh(Ready());
 }
 

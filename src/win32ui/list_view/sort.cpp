@@ -70,7 +70,6 @@ bool SortListViewItems(HWND list, int column, bool toggle, int* sort_column, boo
     LPARAM mark = 0;
     const bool has_mark = ListViewItemData(list, ListView_GetSelectionMark(list), &mark);
     UpdateListSortState(column, toggle, sort_column, ascending, earlier);
-    // clicks preserve shown order for ties, refills rebuild it from earlier sort columns
     const SortKeys none;
     sort.column = *sort_column;
     sort.ascending = *ascending;
@@ -89,6 +88,7 @@ void UpdateListViewSort(HWND list, int column, bool ascending)
 {
     HWND header = list ? ListView_GetHeader(list) : nullptr;
     const int count = header ? Header_GetItemCount(header) : 0;
+    RecordListSort(list, column, column >= 0 ? (ascending ? HDF_SORTUP : HDF_SORTDOWN) : 0);
     bool changed = false;
     for (int display = 0; display < count; ++display)
     {

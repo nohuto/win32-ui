@@ -37,7 +37,6 @@ bool UpdateItems(HMENU popup, const MenuHooks& hooks)
         const UINT position = static_cast<UINT>(index);
         if (id == static_cast<UINT>(-1))
         {
-            // update submenus too, accelerators only ask about the top popup before using item state
             const bool enabled = UpdateItems(GetSubMenu(popup, index), hooks);
             if (hooks.enabled)
             {

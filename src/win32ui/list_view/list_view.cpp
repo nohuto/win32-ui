@@ -8,6 +8,7 @@
 #include "win32ui/gdi/buffered_paint.h"
 #include "win32ui/gdi/gdi_cache.h"
 #include "win32ui/gdi/icon_loader.h"
+#include "win32ui/list_view/column_model_internal.h"
 #include "win32ui/list_view/list_view_internal.h"
 #include "win32ui/menu/popup_menu.h"
 #include "win32ui/theme/palette.h"
@@ -30,6 +31,7 @@ namespace
 
 constexpr UINT_PTR kListSubclassId = 1;
 constexpr UINT_PTR kHeaderSubclassId = 1;
+constexpr UINT_PTR kParentSubclassId = 0x4C56;
 constexpr int kHeaderTextPadding = 8;
 constexpr int kDefaultWidthDip = 100;
 constexpr int kMenuFitColumn = 1;
@@ -49,7 +51,6 @@ constexpr int kTipCursorGap = 18;
 constexpr size_t kTipMeasureLimit = 512;
 constexpr size_t kTipTextLimit = 2000;
 constexpr size_t kTipLineLimit = 60;
-// cell text margin, first column label rect has less padding
 constexpr int kTipLabelInset = 8;
 constexpr int kTipCellInset = 16;
 
@@ -57,23 +58,19 @@ struct ListState
 {
     const ListViewHooks* hooks = nullptr;
     bool dialog_keys = false;
-    // SetListColumns defaults, empty for app inserted columns
     std::vector<ListColumn> columns;
-    // last visible width in DIPs, restored when shown again
     std::vector<int> shown_dip;
+    ColumnModel model;
     HTHEME header_theme = nullptr;
     std::wstring typed;
     DWORD typed_at = 0;
-    // single check button toolbar above the list, sibling window sends notifications to the list
     HWND grid_button = nullptr;
     HIMAGELIST grid_images = nullptr;
-    // right edges of the shown columns in list coordinates, read once per paint
     std::vector<int> grid_edges;
     HWND tip = nullptr;
     std::wstring tip_text;
     int tip_row = -1;
     int tip_column = -1;
-    // notify the app after the dragged divider width is set
     bool resize_posted = false;
 };
 
@@ -109,8 +106,6 @@ ListColors ColorsOf()
     return ListColors{colors.panel, colors.text, colors.muted_text, colors.hover, colors.selection, colors.border};
 }
 
-// hide dotted focus rectangles that ignore app colors
-// WM_UPDATEUISTATE affects only the list, WM_CHANGEUISTATE would hide window cues too
 void HideFocusRectangle(HWND list)
 {
     if (!(SendMessageW(list, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS))
@@ -139,21 +134,37 @@ UINT ColumnsResizedMessage()
     return message;
 }
 
+// columns in subitem numbers, hidden ones included
 int ColumnCount(HWND list)
 {
+    if (const ListState* state = StateOf(list))
+    {
+        return state->model.Count();
+    }
     HWND header = ListView_GetHeader(list);
     return header ? Header_GetItemCount(header) : 0;
 }
 
-std::wstring HeaderText(HWND header, int index)
+std::wstring ColumnTitle(HWND list, int subitem)
 {
+    if (const ListState* state = StateOf(list))
+    {
+        return state->model.Title(subitem);
+    }
     wchar_t text[256] = {};
     HDITEMW item = {};
     item.mask = HDI_TEXT;
     item.pszText = text;
     item.cchTextMax = static_cast<int>(std::size(text));
-    Header_GetItem(header, index, &item);
+    Header_GetItem(ListView_GetHeader(list), subitem, &item);
     return text;
+}
+
+// header positions to subitems, the same while no column is hidden
+int HeaderSubitem(HWND list, int position)
+{
+    const ListState* state = StateOf(list);
+    return state ? state->model.Subitem(position) : position;
 }
 
 void RememberWidths(HWND list, ListState* state)
@@ -309,7 +320,7 @@ void ShowColumnMenu(HWND list, ListState* state, POINT screen)
     ScreenToClient(header, &client);
     HDHITTESTINFO hit = {};
     hit.pt = client;
-    int column = static_cast<int>(SendMessageW(header, HDM_HITTEST, 0, reinterpret_cast<LPARAM>(&hit)));
+    int column = HeaderSubitem(list, static_cast<int>(SendMessageW(header, HDM_HITTEST, 0, reinterpret_cast<LPARAM>(&hit))));
     // unavailable columns must not be fitted open through their dividers
     if (column >= 0 && static_cast<size_t>(column) < state->columns.size() && !state->columns[static_cast<size_t>(column)].available)
     {
@@ -334,7 +345,9 @@ void ShowColumnMenu(HWND list, ListState* state, POINT screen)
             continue;
         }
         const UINT checked = ListView_GetColumnWidth(list, index) > 0 ? MF_CHECKED : 0;
-        AppendMenuW(menu, MF_STRING | checked, static_cast<UINT_PTR>(kMenuColumnBase + index), MenuName(HeaderText(header, index)).c_str());
+        // the first column holds the item text and state
+        const UINT fixed = index == 0 ? MF_GRAYED : 0;
+        AppendMenuW(menu, MF_STRING | checked | fixed, static_cast<UINT_PTR>(kMenuColumnBase + index), MenuName(ColumnTitle(list, index)).c_str());
     }
     const int chosen = TrackContextMenu(menu, screen, list);
     // menu loop dispatched messages, list may be gone or columns changed
@@ -360,7 +373,7 @@ void ShowColumnMenu(HWND list, ListState* state, POINT screen)
     {
         ResetListColumns(list);
     }
-    else if (chosen >= kMenuColumnBase && chosen < kMenuColumnBase + count)
+    else if (chosen > kMenuColumnBase && chosen < kMenuColumnBase + count)
     {
         const int index = chosen - kMenuColumnBase;
         const bool shown = ListView_GetColumnWidth(list, index) > 0;
@@ -499,7 +512,6 @@ bool TypeToSelect(HWND list, ListState* state, wchar_t character)
                                                       : count - 1;
     ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     ListView_SetItemState(list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-    // Shift with the arrow keys extends from the row the text selected
     ListView_SetSelectionMark(list, row);
     ListView_EnsureVisible(list, row, FALSE);
     return true;
@@ -519,7 +531,6 @@ void ShowRowMenu(HWND list, ListState* state, LPARAM lparam)
 {
     POINT screen = {};
     const int row = ContextMenuRow(list, lparam, &screen);
-    // right click outside selection selects that row alone, empty space keeps selection
     if (row >= 0 && !ListView_GetItemState(list, row, LVIS_SELECTED))
     {
         ListView_SetItemState(list, -1, 0, LVIS_SELECTED);
@@ -672,7 +683,6 @@ void ReadGridEdges(HWND list, ListState* state)
     }
 }
 
-// vertical lines at column edges, horizontal lines every row_height from first_line_y
 void PaintGrid(HWND list, const ListState* state, HDC hdc, const RECT& area, int first_line_y, int row_height)
 {
     if (area.top >= area.bottom)
@@ -863,15 +873,73 @@ LRESULT ScrollKeepingGrid(HWND list, UINT message, WPARAM wparam, LPARAM lparam)
     return result;
 }
 
-// keyboard input and top level WM_CHANGEUISTATE clear UISF_HIDEFOCUS, restore it for custom lists
+// list notifications carry native positions, the parent hears subitem numbers
+LRESULT CALLBACK ParentProc(HWND parent, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR)
+{
+    if (message == WM_NOTIFY && lparam)
+    {
+        auto* header = reinterpret_cast<NMHDR*>(lparam);
+        ListState* state = StateOf(header->hwndFrom);
+        if (state && state->model.AnyHidden() && !state->model.IsRawNotify(header))
+        {
+            if (int* field = state->model.NotifySubitem(header))
+            {
+                const int position = *field;
+                *field = state->model.Subitem(position);
+                const LRESULT result = DefSubclassProc(parent, message, wparam, lparam);
+                *field = position;
+                return result;
+            }
+        }
+    }
+    else if (message == WM_NCDESTROY)
+    {
+        RemoveWindowSubclass(parent, ParentProc, kParentSubclassId);
+    }
+    return DefSubclassProc(parent, message, wparam, lparam);
+}
+
+// a list reparented with hidden columns gets it at its next paint
+void HookParent(HWND list, const ListState* state)
+{
+    HWND parent = GetParent(list);
+    if (state->model.AnyHidden() && parent && !GetWindowSubclass(parent, ParentProc, kParentSubclassId, nullptr))
+    {
+        SetWindowSubclass(parent, ParentProc, kParentSubclassId, 0);
+    }
+}
+
 LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data)
 {
     auto* state = reinterpret_cast<ListState*>(data);
+    if (state->model.TakeNative(message, wparam, lparam))
+    {
+        return DefSubclassProc(list, message, wparam, lparam);
+    }
+    if (LRESULT translated = 0; state->model.Translate(list, message, wparam, lparam, &translated))
+    {
+        HookParent(list, state);
+        return translated;
+    }
     if (message == ColumnsResizedMessage() && state->resize_posted)
     {
         state->resize_posted = false;
+        if (static_cast<size_t>(state->model.Count()) == state->shown_dip.size() && !state->shown_dip.empty())
+        {
+            state->model.Reconcile(list, Scale(state->shown_dip[0], WindowDpi(list)));
+        }
+        else
+        {
+            state->model.Reconcile(list, Scale(kDefaultWidthDip, WindowDpi(list)));
+        }
+        HookParent(list, state);
+        RememberWidths(list, state);
         ColumnsChanged(list, state);
         return 0;
+    }
+    if (message == WM_PAINT)
+    {
+        HookParent(list, state);
     }
     switch (message)
     {
@@ -917,7 +985,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             }
             if (header->code == HDN_BEGINTRACKW || header->code == HDN_DIVIDERDBLCLICKW)
             {
-                const int column = reinterpret_cast<const NMHEADERW*>(lparam)->iItem;
+                const int column = state->model.Subitem(reinterpret_cast<const NMHEADERW*>(lparam)->iItem);
                 // dragging an unavailable column divider would reveal the column
                 if (column >= 0 && static_cast<size_t>(column) < state->columns.size() && !state->columns[static_cast<size_t>(column)].available)
                 {
@@ -930,7 +998,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
                 }
             }
             // header applies width after HDN_ENDTRACK
-            if ((header->code == HDN_ENDTRACKW || header->code == HDN_DIVIDERDBLCLICKW) && !state->resize_posted && state->hooks && state->hooks->columns_changed)
+            if ((header->code == HDN_ENDTRACKW || header->code == HDN_DIVIDERDBLCLICKW) && !state->resize_posted)
             {
                 state->resize_posted = PostMessageW(list, ColumnsResizedMessage(), 0, 0) != FALSE;
             }
@@ -943,7 +1011,6 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     case LVM_SETITEMCOUNT:
     case LVM_DELETEALLITEMS:
     case LVM_DELETEITEM:
-        // scrolling changes the cell under a stationary cursor
         if (state->tip)
         {
             SendMessageW(state->tip, TTM_POP, 0, 0);
@@ -999,7 +1066,6 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             return result;
         }
     case WM_KEYDOWN:
-        // spaces extend typed text, native handling would check or select the focused row
         if (wparam == VK_SPACE && TypedTextAlive(state) && GetKeyState(VK_CONTROL) >= 0 && GetKeyState(VK_MENU) >= 0)
         {
             return 0;
@@ -1034,8 +1100,6 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
         }
         break;
     case WM_RBUTTONDOWN:
-        // keep selection on empty space for the row menu
-        // native button release still opens the menu
         if (state->dialog_keys)
         {
             LVHITTESTINFO hit = {};
@@ -1106,6 +1170,7 @@ bool Attach(HWND list, const ListViewHooks* hooks, DWORD extra_styles, bool dial
     }
     state->hooks = hooks;
     state->dialog_keys = state->dialog_keys || dialog_keys;
+    state->model.Load(list);
     HWND header = ListView_GetHeader(list);
     if (header && !GetWindowSubclass(header, HeaderProc, kHeaderSubclassId, nullptr))
     {
@@ -1122,11 +1187,17 @@ bool Attach(HWND list, const ListViewHooks* hooks, DWORD extra_styles, bool dial
 
 } // namespace
 
-int ColumnSubItem(HWND list, int column)
+int ColumnSubItem(HWND list, int position)
 {
-    LVCOLUMNW item = {};
-    item.mask = LVCF_SUBITEM;
-    return ListView_GetColumn(list, column, &item) ? item.iSubItem : -1;
+    return HeaderSubitem(list, position);
+}
+
+void RecordListSort(HWND list, int subitem, int bits)
+{
+    if (ListState* state = StateOf(list))
+    {
+        state->model.RecordSort(subitem, bits);
+    }
 }
 
 bool AttachListView(HWND list, const ListViewHooks* hooks, DWORD extra_styles)
@@ -1143,6 +1214,10 @@ void RefreshListView(HWND list)
 {
     ListState* state = StateOf(list);
     ReleaseHeaderTheme(state);
+    if (state)
+    {
+        HookParent(list, state);
+    }
     if (HWND header = list ? ListView_GetHeader(list) : nullptr)
     {
         InvalidateRect(header, nullptr, TRUE);
@@ -1282,6 +1357,8 @@ void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
     const UINT dpi = WindowDpi(list);
     const int existing = ColumnCount(list);
     HWND header = ListView_GetHeader(list);
+    const ListState* model_state = StateOf(list);
+    const auto position = [&](int subitem) { return model_state ? model_state->model.Position(subitem) : subitem; };
     for (size_t index = 0; index < columns.size(); ++index)
     {
         const ListColumn& column = columns[index];
@@ -1289,19 +1366,23 @@ void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
         item.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT | LVCF_SUBITEM;
         item.pszText = const_cast<wchar_t*>(column.title.c_str());
         item.fmt = column.format;
-        item.cx = column.visible && column.available ? Scale(column.width_dip, dpi) : 0;
+        // the first column holds the item text and state and is always shown
+        const bool shown = index == 0 || (column.visible && column.available);
+        item.cx = shown ? Scale(column.width_dip > 0 || index != 0 ? column.width_dip : column.default_width_dip, dpi) : 0;
         item.iSubItem = static_cast<int>(index);
         if (static_cast<int>(index) < existing)
         {
             // format changes clear the sort arrow, restore it from app sort state
             HDITEMW sort = {};
             sort.mask = HDI_FORMAT;
-            const int arrow = header && Header_GetItem(header, static_cast<int>(index), &sort) ? sort.fmt & (HDF_SORTUP | HDF_SORTDOWN) : 0;
+            const int before = position(static_cast<int>(index));
+            const int arrow = header && before >= 0 && Header_GetItem(header, before, &sort) ? sort.fmt & (HDF_SORTUP | HDF_SORTDOWN) : 0;
             ListView_SetColumn(list, static_cast<int>(index), &item);
-            if (arrow && Header_GetItem(header, static_cast<int>(index), &sort) && !(sort.fmt & arrow))
+            const int after = position(static_cast<int>(index));
+            if (arrow && after >= 0 && Header_GetItem(header, after, &sort) && !(sort.fmt & arrow))
             {
                 sort.fmt |= arrow;
-                Header_SetItem(header, static_cast<int>(index), &sort);
+                Header_SetItem(header, after, &sort);
             }
         }
         else
@@ -1316,6 +1397,11 @@ void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
     if (ListState* state = StateOf(list))
     {
         state->columns = columns;
+        if (!state->columns.empty())
+        {
+            state->columns[0].visible = true;
+            state->columns[0].available = true;
+        }
         state->shown_dip.assign(columns.size(), kDefaultWidthDip);
         for (size_t index = 0; index < columns.size(); ++index)
         {
@@ -1324,10 +1410,22 @@ void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
     }
 }
 
+bool ListColumnRect(HWND list, int subitem, RECT* rect)
+{
+    const ListState* state = StateOf(list);
+    const int position = state ? state->model.Position(subitem) : subitem;
+    HWND header = list ? ListView_GetHeader(list) : nullptr;
+    if (!rect || position < 0 || !header || !Header_GetItemRect(header, position, rect))
+    {
+        return false;
+    }
+    MapWindowPoints(header, list, reinterpret_cast<POINT*>(rect), 2);
+    return true;
+}
+
 std::vector<ListColumn> ListColumns(HWND list)
 {
     ListState* state = StateOf(list);
-    HWND header = list ? ListView_GetHeader(list) : nullptr;
     const int count = ColumnCount(list);
     std::vector<ListColumn> columns = state ? state->columns : std::vector<ListColumn>();
     columns.resize(static_cast<size_t>(std::max(count, 0)));
@@ -1342,7 +1440,7 @@ std::vector<ListColumn> ListColumns(HWND list)
         const int width = ListView_GetColumnWidth(list, index);
         if (column.title.empty())
         {
-            column.title = HeaderText(header, index);
+            column.title = ColumnTitle(list, index);
         }
         column.visible = width > 0;
         column.width_dip = width > 0 ? Unscale(width, dpi) : state ? state->shown_dip[static_cast<size_t>(index)]
@@ -1374,12 +1472,11 @@ int FitListColumn(HWND list, int column)
     {
         return ListView_GetColumnWidth(list, column);
     }
-    const std::wstring title = HeaderText(ListView_GetHeader(list), column);
+    const std::wstring title = ColumnTitle(list, column);
     ListView_SetColumnWidth(list, column, LVSCW_AUTOSIZE);
     int width = ListView_GetColumnWidth(list, column);
     if (GetWindowLongPtrW(list, GWL_STYLE) & LVS_OWNERDATA)
     {
-        // owner data lists measure visible rows only, use the same margin for other rows
         const auto [all, shown] = CellTextWidths(list, column);
         width = std::max(width, width - shown + all);
     }
@@ -1401,7 +1498,7 @@ std::wstring SelectedRowsText(HWND list)
     {
         if (ListView_GetColumnWidth(list, column) > 0)
         {
-            shown.push_back(ColumnSubItem(list, column));
+            shown.push_back(column);
         }
     }
     const ListState* state = StateOf(list);

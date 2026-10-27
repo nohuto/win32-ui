@@ -27,6 +27,8 @@ target_sources(win32ui
         src/win32ui/hex_digit_internal.h
         src/win32ui/json/reader.cpp
         src/win32ui/json/writer.cpp
+        src/win32ui/list_view/column_model.cpp
+        src/win32ui/list_view/column_model_internal.h
         src/win32ui/list_view/list_view.cpp
         src/win32ui/list_view/list_view_internal.h
         src/win32ui/list_view/sort.cpp

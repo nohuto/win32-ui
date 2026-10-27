@@ -54,7 +54,7 @@ StatusState* StateOf(HWND bar)
     return bar && GetWindowSubclass(bar, StatusProc, kStatusSubclassId, &data) ? reinterpret_cast<StatusState*>(data) : nullptr;
 }
 
-// status bar colors, read from the palette at paint time
+// status bar colors
 struct StatusBarColors
 {
     COLORREF background = CLR_NONE;
@@ -73,7 +73,7 @@ StatusBarColors ColorsOf()
     return StatusBarColors{colors.surface, colors.text, colors.border, ThemeStatusBarCustom(), colors.accent};
 }
 
-// classic progress bars add sunken edges on every theme change without a visual style, including system changes
+// classic progress bars add sunken edges on every theme change without a visual style
 LRESULT CALLBACK ProgressProc(HWND progress, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR)
 {
     if (message == WM_THEMECHANGED)
@@ -227,7 +227,6 @@ void LayoutParts(HWND bar, StatusState* state)
             const StatusPart& part = state->parts[index];
             widths[index] = part.fill ? 0 : std::max(widths[index] + Scale(kPartMarginDip, dpi), Scale(part.min_dip, dpi));
         }
-        // parts before the fill start at the left, parts after it end at the size grip
         const size_t fill = static_cast<size_t>(std::ranges::find(state->parts, true, &StatusPart::fill) - state->parts.begin());
         std::vector<int> edges(widths.size());
         int edge = 0;

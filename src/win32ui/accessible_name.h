@@ -10,8 +10,6 @@
 namespace win32ui
 {
 
-// sets the UI Automation and screen reader name for a control without its own label or text
-// uses IAccPropServices on the COM initialized UI thread, keeps the name until window destruction
 void SetAccessibleName(HWND window, std::wstring_view name);
 // call before CoUninitialize
 void ReleaseAccessibility();

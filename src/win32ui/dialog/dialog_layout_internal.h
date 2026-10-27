@@ -10,10 +10,8 @@
 namespace win32ui
 {
 
-// case insensitive class name match, false for a null window
 bool ClassIs(HWND window, const wchar_t* name);
 std::wstring WindowText(HWND window);
-// topmost tooltip for owner, visible while inactive and keeping ampersands
 HWND CreateTooltip(HWND owner);
 
 void EraseDialogBackground(HWND dialog, HDC hdc, HBRUSH background);

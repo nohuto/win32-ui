@@ -36,7 +36,6 @@ namespace
 constexpr UINT_PTR kComboSubclassId = 1;
 constexpr UINT_PTR kGroupBoxSubclassId = 2;
 constexpr UINT_PTR kTreeSubclassId = 3;
-// check box text and edge spacing
 constexpr int kCheckPaddingDip = 4;
 constexpr int kGroupTextInsetDip = 7;
 
@@ -509,7 +508,7 @@ void ApplyControl(HWND window)
     GetClassNameW(window, name, static_cast<int>(std::size(name)));
     const ThemeColors& colors = CurrentThemeColors();
     // theme every window so plain scroll bars follow too
-    // list headers keep the items view theme because it supplies the sort arrow
+    // list headers keep the items view theme because it adds the sort arrow
     if (_wcsicmp(name, WC_HEADERW) == 0)
     {
         ThemeClass(window, L"DarkMode_ItemsView", L"ItemsView");
@@ -598,7 +597,6 @@ void RefreshLibraryControl(HWND window)
 
 LPCWSTR RoleProperty()
 {
-    // use an integer atom, string names add an atom reference on every SetProp
     static const LPCWSTR atom = MAKEINTATOM(GlobalAddAtomW(L"win32ui.TextRole"));
     return atom;
 }
@@ -652,7 +650,7 @@ void ReapplyTheme(HWND top_level)
         },
         0
     );
-    // tooltips are owned popups, not children, include those owned by dialogs too
+
     EnumThreadWindows(
         GetCurrentThreadId(),
         [](HWND window, LPARAM parameter) -> BOOL {

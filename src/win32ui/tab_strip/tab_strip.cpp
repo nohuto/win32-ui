@@ -29,7 +29,7 @@ namespace
 {
 
 constexpr UINT_PTR kTabSubclassId = 1;
-// button tabs provide their own gaps, so use little padding
+// button tabs have their own gaps, so use little padding
 constexpr int kPadXDip = 10;
 constexpr int kPadYDip = 2;
 constexpr int kCloseDip = 14;
@@ -45,22 +45,19 @@ struct TabState
     int close_hot = -1;
     int close_down = -1;
     bool tracking = false;
-    // last fit inputs and height, identical inputs keep the mode without toggling
     std::array<int, 5> fit_inputs = {};
     int fit_height = 0;
-    // cached row height until refresh or font change, 0 remeasures
     int row_height = 0;
-    // one tooltip per tab, rects updated each paint
+    // blank item image that widens only tabs with an x
+    HIMAGELIST close_room = nullptr;
+    int close_room_width = 0;
     HWND tip = nullptr;
     int tip_tools = 0;
     std::wstring tip_text;
-    // tab add/remove generation, posted close indexes are valid only while unchanged
     LPARAM tab_changes = 0;
-    // shared with accessible objects, cleared when strip is destroyed
     std::shared_ptr<TabState*> accessible_link;
 };
 
-// posted accessible close, wparam is tab index, lparam is tab_changes at press time
 UINT CloseMessage()
 {
     static const UINT message = RegisterWindowMessageW(L"win32ui.TabStripClose");
@@ -75,7 +72,7 @@ TabState* StateOf(HWND strip)
     return strip && GetWindowSubclass(strip, TabProc, kTabSubclassId, &data) ? reinterpret_cast<TabState*>(data) : nullptr;
 }
 
-// tab colors, read from the palette at paint time
+// tab colors
 struct TabStripColors
 {
     COLORREF background = CLR_NONE;
@@ -83,10 +80,8 @@ struct TabStripColors
     COLORREF tab_text = CLR_NONE;
     COLORREF selected = CLR_NONE;
     COLORREF selected_text = CLR_NONE;
-    // label and glyph for unselected tabs and hovered close buttons
     COLORREF hover = CLR_NONE;
     COLORREF hover_text = CLR_NONE;
-    // pressed close button and glyph
     COLORREF pressed = CLR_NONE;
     COLORREF pressed_text = CLR_NONE;
     COLORREF border = CLR_NONE;
@@ -137,19 +132,6 @@ bool CanClose(HWND strip, const TabState* state, int index)
     return state->hooks && state->hooks->close && TabCtrl_GetItemCount(strip) > 1 && (!state->hooks->closable || state->hooks->closable(state->hooks->context, index));
 }
 
-bool AnyCloses(HWND strip, const TabState* state)
-{
-    const int count = TabCtrl_GetItemCount(strip);
-    for (int index = 0; index < count; ++index)
-    {
-        if (CanClose(strip, state, index))
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
 bool CloseRect(HWND strip, const TabState* state, int index, RECT* rect)
 {
     RECT item = {};
@@ -165,6 +147,40 @@ bool CloseRect(HWND strip, const TabState* state, int index, RECT* rect)
     rect->top = item.top + (height - size) / 2;
     rect->bottom = rect->top + size;
     return rect->left < rect->right;
+}
+
+// padding applies to every tab, so the x space comes from an item image
+void ReserveCloseRoom(HWND strip, TabState* state, UINT dpi)
+{
+    // the tab control adds the image width plus the horizontal padding
+    const int width = std::max(1, Scale(kCloseDip + 2 * kCloseGapDip, dpi) - 2 * Scale(kPadXDip, dpi));
+    if (!state->close_room || state->close_room_width != width)
+    {
+        HIMAGELIST images = ImageList_Create(width, 1, ILC_COLOR32, 1, 0);
+        if (!images || !ImageList_SetImageCount(images, 1))
+        {
+            if (images)
+            {
+                ImageList_Destroy(images);
+            }
+            return;
+        }
+        TabCtrl_SetImageList(strip, images);
+        if (state->close_room)
+        {
+            ImageList_Destroy(state->close_room);
+        }
+        state->close_room = images;
+        state->close_room_width = width;
+    }
+    const int count = TabCtrl_GetItemCount(strip);
+    for (int index = 0; index < count; ++index)
+    {
+        TCITEMW item = {};
+        item.mask = TCIF_IMAGE;
+        item.iImage = CanClose(strip, state, index) ? 0 : -1;
+        TabCtrl_SetItem(strip, index, &item);
+    }
 }
 
 // label space left of the close button
@@ -247,9 +263,6 @@ std::vector<int> ClosableTabs(HWND strip, const TabState* state)
     return tabs;
 }
 
-// extends native accessibility with close buttons after tab children
-// post presses because close hooks may destroy the strip and must not run inside a client COM call
-// clients may keep this object after destruction, shared link prevents calls to a reused window handle
 class TabAccessible final : public IAccessible
 {
   public:
@@ -540,14 +553,12 @@ class TabAccessible final : public IAccessible
     {
         return *link_ != nullptr;
     }
-    // tab named by an accessible close child, -1 for other children or disconnected strips
     int CloseIndex(const VARIANT& child) const
     {
         if (child.vt != VT_I4)
         {
             return -1;
         }
-        // tabs precede close buttons in accessible child ids
         const long position = child.lVal - TabCtrl_GetItemCount(strip_) - 1;
         if (position < 0)
         {
@@ -568,7 +579,6 @@ class TabAccessible final : public IAccessible
     LONG references_ = 1;
 };
 
-// tab changes shift indexes, pressed or hovered close buttons could target another tab
 void ForgetTabs(HWND strip, TabState* state)
 {
     ++state->tab_changes;
@@ -599,7 +609,6 @@ void UpdateHot(HWND strip, TabState* state, POINT point)
     }
 }
 
-// draw closed boxes, selected tabs keep their colors while hovered
 void DrawItem(HDC hdc, HWND strip, const TabState* state, const TabStripColors& colors, int index, const RECT& item, bool selected)
 {
     const bool hot = index == state->hot && !selected;
@@ -656,7 +665,7 @@ void Paint(HWND strip, const TabState* state, HDC hdc)
             DrawItem(hdc, strip, state, colors, index, item, index == current);
         }
     }
-    // only keyboard input focuses the strip, focus mark follows window keyboard cues
+    // only keyboard input focuses the strip
     RECT focused = {};
     if (GetFocus() == strip && !(SendMessageW(strip, WM_QUERYUISTATE, 0, 0) & UISF_HIDEFOCUS) && TabCtrl_GetItemRect(strip, TabCtrl_GetCurFocus(strip), &focused))
     {
@@ -884,6 +893,11 @@ LRESULT CALLBACK TabProc(HWND strip, UINT message, WPARAM wparam, LPARAM lparam,
         {
             *state->accessible_link = nullptr;
         }
+        if (state->close_room)
+        {
+            TabCtrl_SetImageList(strip, nullptr);
+            ImageList_Destroy(state->close_room);
+        }
         RemoveWindowSubclass(strip, TabProc, kTabSubclassId);
         delete state;
         break;
@@ -930,7 +944,8 @@ void RefreshTabStrip(HWND strip)
     state->hot = -1;
     state->close_hot = -1;
     const UINT dpi = WindowDpi(strip);
-    TabCtrl_SetPadding(strip, Scale(kPadXDip + (AnyCloses(strip, state) ? kCloseDip + kCloseGapDip : 0), dpi), Scale(kPadYDip, dpi));
+    TabCtrl_SetPadding(strip, Scale(kPadXDip, dpi), Scale(kPadYDip, dpi));
+    ReserveCloseRoom(strip, state, dpi);
     SendMessageW(strip, TCM_SETMINTABWIDTH, 0, Scale(kTabMinWidthDip, dpi));
     ApplyFrame(state->hooks, strip);
     ApplyFrame(state->hooks, FindWindowExW(strip, nullptr, UPDOWN_CLASSW, nullptr));

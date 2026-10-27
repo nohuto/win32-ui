@@ -25,7 +25,6 @@ LRESULT CALLBACK SelectAllProc(HWND edit, UINT message, WPARAM wparam, LPARAM lp
         SendMessageW(edit, EM_SETSEL, 0, -1);
         return 0;
     }
-    // Ctrl+A also arrives as a control character that beeps
     if (message == WM_CHAR && wparam == 1)
     {
         return 0;

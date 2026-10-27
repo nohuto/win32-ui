@@ -3,7 +3,7 @@
 
 #pragma once
 
-// dialog spacing in DIPs, for win32ui::Scale
+// dialog spacing in DIPs
 
 namespace win32ui::metrics
 {

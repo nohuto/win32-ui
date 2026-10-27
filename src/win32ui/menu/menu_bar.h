@@ -24,10 +24,8 @@ class MenuBar
 
     // replaces and destroys the previous menu, window owns bar
     void Attach(HWND window, HMENU bar);
-    // call after theme, font or DPI changes
-    // uses Windows menu font because Windows fixes bar height to that font regardless of item measurements
     void ApplyTheme();
-    // handles WM_MEASUREITEM and WM_DRAWITEM, true for bar items
+    // handles WM_MEASUREITEM and WM_DRAWITEM
     bool Measure(MEASUREITEMSTRUCT* info) const;
     bool Draw(const DRAWITEMSTRUCT* info) const;
     // call after DefWindowProc handles WM_NCPAINT or WM_NCACTIVATE to cover the light line under the bar

@@ -13,7 +13,6 @@ namespace win32ui
 
 void AppendJsonString(std::wstring* out, std::wstring_view text);
 
-// balance container calls, empty keys omit the member name
 class JsonWriter
 {
   public:

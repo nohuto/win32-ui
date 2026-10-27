@@ -23,7 +23,6 @@ namespace
 
 constexpr int kMaxDetailLines = 10;
 constexpr int kIconSize = 32;
-// details box border and margins reduce available text width
 constexpr int kBoxTextInset = 10;
 
 struct IconCloser
@@ -34,7 +33,6 @@ struct IconCloser
     }
 };
 
-// edits dont display lone LF, convert line breaks to CR LF and trim trailing breaks
 std::wstring EditLineBreaks(std::wstring_view text)
 {
     while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n'))
@@ -73,8 +71,6 @@ int TextHeight(HWND window, HFONT font, const std::wstring& text, int width, UIN
     return rect.bottom;
 }
 
-// template size is a placeholder, caller sets client width, layout sets height
-// also applies frame style changes
 void SetClientWidth(HWND dialog, int width, UINT dpi)
 {
     RECT client = {};
@@ -126,11 +122,10 @@ class MessageDialog final : public DialogWindow
             {
                 style |= ES_AUTOHSCROLL;
             }
-            // edit creation fails when text exceeds the default 32767-character limit
+            // edit creation fails when text exceeds the default 32767 character limit
             details_box_ = CreateControl(hwnd(), WC_EDITW, L"", style, kMessageDetailsId);
             SendMessageW(details_box_, EM_SETLIMITTEXT, 0, 0);
             SetWindowTextW(details_box_, details_.c_str());
-            // tab order: after message, before Copy
             SetWindowPos(details_box_, message_, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             if (!multiline_)
             {
@@ -209,8 +204,6 @@ class MessageDialog final : public DialogWindow
         }
         Place(copy_, margin, buttons_top, copy_width, button_height);
 
-        // fixed dialogs refit after each change, resizable dialogs fit only on opening
-        // opening size becomes the minimum
         if (!multiline_ || !sized_)
         {
             sized_ = true;
@@ -321,7 +314,6 @@ class AboutDialog final : public DialogWindow
         }
         ok_ = GetDlgItem(hwnd(), IDOK);
         SetWindowTextW(ok_, spec_.ok_text.c_str());
-        // links precede OK in tab order
         SetWindowPos(ok_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 

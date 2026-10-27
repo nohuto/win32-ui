@@ -29,10 +29,8 @@ constexpr int kBarMarginDip = 4;
 struct ToolbarState
 {
     const ToolbarHooks* hooks = nullptr;
-    // commands in image order, separators have no image
     std::vector<int> commands;
     HIMAGELIST images = nullptr;
-    // last prepaint hover button, postpaint no longer includes CDIS_HOT
     DWORD_PTR hover_item = static_cast<DWORD_PTR>(-1);
     std::wstring tip;
 };
@@ -47,17 +45,14 @@ ToolbarState* StateOf(HWND toolbar)
     return toolbar && GetWindowSubclass(toolbar, ToolbarProc, kToolbarSubclassId, &data) ? reinterpret_cast<ToolbarState*>(data) : nullptr;
 }
 
-// toolbar colors, read from the palette at paint time
 struct ToolbarColors
 {
     COLORREF background = CLR_NONE;
-    // dropdown arrow, disabled color is halfway between muted and background
     COLORREF text = CLR_NONE;
     COLORREF muted = CLR_NONE;
     COLORREF hover = CLR_NONE;
     COLORREF checked = CLR_NONE;
     COLORREF border = CLR_NONE;
-    // true paints hover/checked boxes and arrows, false keeps native button styles over the background
     bool paint_buttons = false;
 };
 
@@ -162,7 +157,6 @@ LRESULT ItemPrepaint(HWND toolbar, ToolbarState* state, const ToolbarColors& col
     {
         DrawButtonBox(draw->nmcd.hdc, draw->nmcd.rc, colors.checked, colors.border);
     }
-    // native hot, pressed and checked backgrounds would cover custom boxes
     LRESULT result = TBCDRF_USECDCOLORS | TBCDRF_NOBACKGROUND | TBCDRF_NOEDGES;
     if (index >= 0 && (button.fsStyle & BTNS_DROPDOWN))
     {
@@ -181,7 +175,6 @@ LRESULT DrawDropdownArrow(HWND toolbar, const ToolbarState* state, const Toolbar
     {
         return CDRF_DODEFAULT;
     }
-    // postpaint has a smaller rc and different state, read both from the toolbar
     const LRESULT button_state = SendMessageW(toolbar, TB_GETSTATE, draw->nmcd.dwItemSpec, 0);
     const bool disabled = !(button_state & TBSTATE_ENABLED);
     const int saved = SaveDC(draw->nmcd.hdc);
@@ -241,7 +234,6 @@ LRESULT CALLBACK ToolbarProc(HWND toolbar, UINT message, WPARAM wparam, LPARAM l
     switch (message)
     {
     case WM_SETFOCUS:
-        // focus uses the hot button, arrow keys move it
         if (SendMessageW(toolbar, TB_GETHOTITEM, 0, 0) < 0)
         {
             const int count = static_cast<int>(SendMessageW(toolbar, TB_BUTTONCOUNT, 0, 0));

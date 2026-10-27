@@ -36,20 +36,16 @@ constexpr int kObjectOffset = (DLGWINDOWEXTRA + 7) & ~7;
 
 const wchar_t* g_class_name = nullptr;
 const DialogTheme* g_theme = nullptr;
-// modal frames hide caption icons, so omit the frame when using the app icon
 bool g_caption_icon = false;
 int g_modal_depth = 0;
-// object being created, dialog manager creates the window without passing it
 DialogWindow* g_creating = nullptr;
 
-// open dialogs, modal and modeless, in creation order
 std::vector<HWND>& OpenDialogs()
 {
     static std::vector<HWND> dialogs;
     return dialogs;
 }
 
-// theming selects all text in editable combo boxes, preserve the dialog selection
 void ApplyTheme(HWND dialog)
 {
     if (!g_theme || !g_theme->apply)
@@ -80,8 +76,8 @@ void ApplyTheme(HWND dialog)
     }
 }
 
-// centers on the owner or work area, within the destination monitor work area
-// fixed windows that dont fit keep their size and caption on screen, like dialog boxes
+// centers on the owner or work area, within the monitor work area
+// fixed windows that dont fit keep their size and caption on screen
 RECT CenteredRect(HWND owner, int width, int height, bool resizable)
 {
     RECT target = {};
@@ -108,8 +104,8 @@ RECT CenteredRect(HWND owner, int width, int height, bool resizable)
     return rect;
 }
 
-// Return presses the default button in multiline edits without ES_WANTRETURN
-// Ctrl+Return inserts a line break
+// return presses the default button in multiline edits without ES_WANTRETURN
+// CTRL+return inserts a line break
 bool PressDefaultOnReturn(HWND dialog, const MSG& message)
 {
     if (message.message != WM_KEYDOWN || message.wParam != VK_RETURN || GetKeyState(VK_CONTROL) < 0 || !IsChild(dialog, message.hwnd))
@@ -131,8 +127,7 @@ bool PressDefaultOnReturn(HWND dialog, const MSG& message)
     return true;
 }
 
-// loads executable DIALOGEX resource name with the UI font and registered class, hidden until layout
-// returns empty for other template formats
+// loads executable DIALOGEX resource name with the UI font and registered class
 std::vector<BYTE> LoadDialogTemplate(const wchar_t* name)
 {
     const HINSTANCE instance = GetModuleHandleW(nullptr);
@@ -171,7 +166,7 @@ std::vector<BYTE> LoadDialogTemplate(const wchar_t* name)
         items += 2;
     }
     items = (items + 3) & ~size_t{3};
-    // templates without controls end at the unpadded font name, item count offset is 16
+
     if (items > size && word(16) == 0)
     {
         items = size;
@@ -207,14 +202,12 @@ class ProcDialog final : public DialogWindow
         place_on_ = place_on;
     }
 
-    // window deletes the object on destruction
+    // window deletes object on destruction
     bool owned = false;
 
   protected:
     void OnCreate() override
     {
-        // like DialogBox, focus the first control unless the procedure returned FALSE to set focus itself
-        // look it up again because WM_INITDIALOG can change tab order
         if (proc_(hwnd(), WM_INITDIALOG, reinterpret_cast<WPARAM>(GetNextDlgTabItem(hwnd(), nullptr, FALSE)), param_))
         {
             focus_ = GetNextDlgTabItem(hwnd(), nullptr, FALSE);
@@ -293,7 +286,7 @@ bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const Di
     window_class.cbWndExtra = kObjectOffset + sizeof(void*);
     if (!RegisterClassExW(&window_class))
     {
-        // small icon is not shared, class would have owned it
+        // small icon isnt shared, class would have owned it
         if (window_class.hIconSm)
         {
             DestroyIcon(window_class.hIconSm);
@@ -340,7 +333,7 @@ void ReapplyThemeToDialogs()
             continue;
         }
         ApplyTheme(dialog);
-        // grid buttons and list/status tooltips are not children of dialog controls
+        // grid buttons and list/status tooltips arent children of dialog controls
         for (HWND child = GetWindow(dialog, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
         {
             wchar_t name[32] = {};
@@ -409,8 +402,6 @@ const DialogTheme* DialogWindow::theme() noexcept
 
 void DialogWindow::FinishControls(const std::vector<HWND>& from_template)
 {
-    // OnCreate controls get the UI font even if they already have one
-    // fonts set by OnCreate on template controls stay
     struct Pass
     {
         HFONT font;
@@ -428,7 +419,7 @@ void DialogWindow::FinishControls(const std::vector<HWND>& from_template)
         },
         reinterpret_cast<LPARAM>(&pass)
     );
-    // theme dialog edits, excluding edits inside combo boxes
+
     for (HWND child = GetWindow(hwnd_, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
     {
         if (ClassIs(child, WC_EDITW))
@@ -453,7 +444,7 @@ bool DialogWindow::CreateTemplateWindow(HWND root_owner, const wchar_t* template
     min_height_dip_ = 0;
     fonts_.Create(WindowDpi(root_owner));
     // first window message binds the object, WM_INITDIALOG runs layout
-    // dialog manager only sends it when a dialog procedure exists, so supply an empty one
+    // dialog manager only sends it when a dialog procedure exists, so give an empty one
     g_creating = this;
     CreateDialogIndirectParamW(GetModuleHandleW(nullptr), reinterpret_cast<const DLGTEMPLATE*>(dialog.data()), root_owner, [](HWND, UINT, WPARAM, LPARAM) -> INT_PTR { return FALSE; }, 0);
     g_creating = nullptr;
@@ -473,7 +464,7 @@ void DialogWindow::InitTemplate()
     {
         dpi_behavior(hwnd_, kDialogDpiDisableAll, kDialogDpiDisableAll);
     }
-    // dialog manager uses monitor DPI, rescale only for a DPI override
+    // dialog manager uses monitor DPI
     if (WindowDpi(hwnd_) != fonts_.dpi())
     {
         fonts_.Create(WindowDpi(hwnd_));
@@ -555,7 +546,6 @@ void DialogWindow::CenterOnOwner()
 
 void DialogWindow::FocusInitial()
 {
-    // show focus rectangles and access keys regardless of how the dialog opened
     SendMessageW(hwnd_, WM_CHANGEUISTATE, MAKEWPARAM(UIS_CLEAR, UISF_HIDEFOCUS | UISF_HIDEACCEL), 0);
     HWND first = GetNextDlgTabItem(hwnd_, nullptr, FALSE);
     HWND preferred = initial_focus();
@@ -584,8 +574,7 @@ INT_PTR DialogWindow::RunModal(HWND owner, const wchar_t* template_name)
 {
     const ModalScope modal;
     HWND root_owner = owner ? GetAncestor(owner, GA_ROOT) : nullptr;
-    // nested dialogs, including asynchronous failures, belong to the open dialog
-    // otherwise that dialog stays usable behind them
+
     if (root_owner && !IsWindowEnabled(root_owner) && !OpenDialogs().empty())
     {
         root_owner = OpenDialogs().back();
@@ -594,6 +583,7 @@ INT_PTR DialogWindow::RunModal(HWND owner, const wchar_t* template_name)
     {
         return IDCANCEL;
     }
+
     // reenable only owners disabled here, another modal window may still need them disabled
     const bool owner_was_enabled = root_owner && IsWindowEnabled(root_owner);
     if (owner_was_enabled)
@@ -791,7 +781,6 @@ LRESULT DialogWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam)
             break;
         }
     case WM_CLOSE:
-        // use the Escape path so caption close also gets the dialog specific IDCANCEL result
         SendMessageW(hwnd_, WM_COMMAND, MAKEWPARAM(IDCANCEL, BN_CLICKED), 0);
         return 0;
     case WM_ERASEBKGND:
@@ -814,7 +803,6 @@ LRESULT DialogWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam)
         }
         break;
     case WM_SIZE:
-        // size messages arrive before OnCreate adds controls, first layout follows OnCreate
         if (!created_)
         {
             return 0;

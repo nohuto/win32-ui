@@ -135,7 +135,6 @@ int FontSet::TextWidth(const wchar_t* text) const
     {
         return 0;
     }
-    // screen DC lookup costs more than measurement, layouts repeatedly measure the same text
     const std::wstring_view view(text);
     if (const auto known = widths_.find(view); known != widths_.end())
     {

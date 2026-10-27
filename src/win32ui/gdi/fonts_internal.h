@@ -8,7 +8,7 @@
 namespace win32ui
 {
 
-// metrics from WM_GETFONT, or system font when unset
+// metrics from WM_GETFONT
 TEXTMETRICW WindowFontMetrics(HWND window);
 
 } // namespace win32ui

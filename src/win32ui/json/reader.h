@@ -34,7 +34,6 @@ enum class JsonErrorCode
     kCustom
 };
 
-// zero based offset, one based line and column in UTF-16 units, only LF starts a line
 struct JsonPosition
 {
     std::size_t offset = 0;
@@ -50,7 +49,6 @@ struct JsonDiagnostic
     bool first_failure = false;
 };
 
-// called on every failure attempt, custom_text is borrowed during the call
 using JsonErrorCallback = void (*)(void* context, const JsonDiagnostic& diagnostic, std::wstring_view custom_text);
 
 struct JsonErrorSink
@@ -59,7 +57,6 @@ struct JsonErrorSink
     void* context = nullptr;
 };
 
-// borrows input and sink context, copies have independent parser state
 class JsonReader
 {
   public:
@@ -68,7 +65,6 @@ class JsonReader
     JsonReader(const JsonReader&) = default;
     JsonReader& operator=(const JsonReader&) = default;
 
-    // callback consumes the value, key is borrowed during the call
     template <typename Member>
     bool Object(Member&& member)
     {

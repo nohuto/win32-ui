@@ -39,7 +39,7 @@ struct SplitterState
     int size = 0;
 };
 
-// splitter colors, read from the palette at paint time
+// splitter colors
 struct SplitterColors
 {
     COLORREF background = CLR_NONE;
@@ -78,7 +78,7 @@ void Paint(HWND splitter, const SplitterState* state, HDC hdc)
     SelectObject(hdc, old_pen);
 }
 
-// use screen coordinates because layout moves the bar under the mouse
+// use screen coordinates as layout moves the bar under the mouse
 int Along(HWND splitter, const SplitterState* state, LPARAM lparam)
 {
     POINT point = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};

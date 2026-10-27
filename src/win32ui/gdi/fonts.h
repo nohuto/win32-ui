@@ -15,23 +15,16 @@
 namespace win32ui
 {
 
-// replaces Windows message font, keeping point size at every DPI, nullptr restores it
 void SetCustomFont(const LOGFONTW* font);
 
-// Windows message font at dpi, following Windows text size, default is Segoe UI 9 pt
-// dpi 0 uses system DPI
 LOGFONTW MessageFontLogFont(UINT dpi);
-// Windows menu font at dpi, menu bar height follows it
 LOGFONTW MenuFontLogFont(UINT dpi);
-// custom font if set, otherwise Windows message font
 LOGFONTW UIFontLogFont(UINT dpi);
 
-// point size at system DPI, uses zero_height_fallback when height is 0
 int FontPointSize(const LOGFONTW& font, int zero_height_fallback = 0);
 int FontHeight(int point_size);
 int FontHeight(int point_size, UINT dpi);
 
-// UI font for one window and DPI, with line height and text width cache
 class FontSet
 {
   public:
@@ -48,12 +41,10 @@ class FontSet
     {
         return line_height_;
     }
-    // grows a DIP length by the line height increase over Segoe UI 9 pt, never shrinks it
     int Grow(int dip) const noexcept
     {
         return MulDiv(dip, grow_percent_, 100);
     }
-    // text width in the UI font, cached per font for up to 512 texts
     int TextWidth(const wchar_t* text) const;
 
   private:

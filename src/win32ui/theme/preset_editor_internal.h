@@ -6,7 +6,6 @@
 namespace win32ui
 {
 
-// preset_editor.rc control IDs, also used as UI Automation AutomationIds
 inline constexpr int kPresetListId = 2101;
 inline constexpr int kPresetColorsId = 2102;
 inline constexpr int kPresetNewId = 2103;
