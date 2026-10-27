@@ -21,7 +21,6 @@ struct TabStripHooks
     void* context = nullptr;
 };
 
-
 HWND CreateTabStrip(HWND parent, int id, const wchar_t* name, const TabStripHooks* hooks);
 
 inline constexpr int kTabMinWidthDip = 90;

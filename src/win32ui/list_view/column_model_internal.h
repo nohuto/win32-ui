@@ -16,7 +16,7 @@ namespace win32ui
 
 class ColumnModel
 {
-public:
+  public:
     void Load(HWND list);
     bool TakeNative(UINT message, WPARAM wparam, LPARAM lparam);
     bool Translate(HWND list, UINT message, WPARAM wparam, LPARAM lparam, LRESULT* result);
@@ -31,7 +31,7 @@ public:
     std::wstring Title(int subitem) const;
     void RecordSort(int subitem, int bits);
 
-private:
+  private:
     struct Column
     {
         std::wstring title;

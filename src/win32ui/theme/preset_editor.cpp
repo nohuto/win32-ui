@@ -496,7 +496,7 @@ class PresetEditor final : public DialogWindow
         {
             AppendMenuItem(menu, row_flags, kPresetEditColorId, Text(PresetEditorText::edit_color));
         }
-        
+
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         const wchar_t* copy = list_hooks_.label ? list_hooks_.label(ListLabel::copy) : nullptr;
         const wchar_t* select_all = list_hooks_.label ? list_hooks_.label(ListLabel::select_all) : nullptr;
