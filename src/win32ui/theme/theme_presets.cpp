@@ -448,7 +448,7 @@ bool ParseThemeColor(std::wstring_view text, COLORREF* color)
         unsigned values[3] = {};
         for (size_t index = 0; index < std::size(values); ++index)
         {
-            // whitespace may come before a component, not before its comma
+            // whitespace may come before a component
             while (!text.empty() && iswspace(text.front()))
             {
                 text.remove_prefix(1);

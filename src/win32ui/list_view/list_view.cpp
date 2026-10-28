@@ -1062,7 +1062,11 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     case WM_UPDATEUISTATE:
         {
             const LRESULT result = DefSubclassProc(list, message, wparam, lparam);
-            HideFocusRectangle(list);
+            // the lists own UIS_SET comes back here, while Windows keeps keyboard cues shown asking again would never end
+            if (LOWORD(wparam) != UIS_SET)
+            {
+                HideFocusRectangle(list);
+            }
             return result;
         }
     case WM_KEYDOWN:
