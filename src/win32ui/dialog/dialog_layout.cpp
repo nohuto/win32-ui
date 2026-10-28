@@ -20,6 +20,7 @@
 #include <iterator>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifndef DCX_USESTYLE
@@ -99,6 +100,7 @@ struct Fit
     HFONT font = nullptr;
     LONG_PTR style = 0;
     Kind kind = Kind::other;
+    UINT dpi = 0;
     int width = 0;
     int line = 0;
 };
@@ -257,14 +259,15 @@ int TextFitWidth(HWND control)
     std::wstring text = WindowText(control);
     const auto font = reinterpret_cast<HFONT>(SendMessageW(control, WM_GETFONT, 0, 0));
     const LONG_PTR style = GetWindowLongPtrW(control, GWL_STYLE) & 0xFFFF;
+    const UINT dpi = WindowDpi(control);
     auto cached = fits.find(control);
-    if (cached == fits.end() || cached->second.kind != kind || cached->second.font != font || cached->second.style != style || cached->second.text != text)
+    if (cached == fits.end() || cached->second.kind != kind || cached->second.font != font || cached->second.style != style || cached->second.dpi != dpi || cached->second.text != text)
     {
         if (fits.size() >= 512)
         {
             fits.clear();
         }
-        Fit fit = {std::move(text), font, style, kind};
+        Fit fit = {std::move(text), font, style, kind, dpi};
         fit.width = Measure(control, kind, style, fit.text, font, &fit.line);
         cached = fits.insert_or_assign(control, std::move(fit)).first;
     }
@@ -338,6 +341,9 @@ void FitDialogText(HWND dialog)
         int short_by = 0;
     };
     std::vector<Control> controls;
+    // a group box over an earlier one of the same size takes that ones final rectangle, laid out on its own each of
+    // the two would be the others container
+    std::vector<std::pair<HWND, size_t>> overlays;
     for (HWND child = GetWindow(dialog, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
     {
         const LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
@@ -360,6 +366,12 @@ void FitDialogText(HWND dialog)
         control.group = button && type == BS_GROUPBOX;
         control.option = button && (type == BS_AUTORADIOBUTTON || type == BS_RADIOBUTTON || type == BS_AUTOCHECKBOX || type == BS_CHECKBOX);
         control.group_start = (style & WS_GROUP) != 0;
+        const auto same = std::find_if(controls.begin(), controls.end(), [&](const Control& other) { return control.group && other.group && EqualRect(&other.initial, &control.initial); });
+        if (same != controls.end())
+        {
+            overlays.emplace_back(child, static_cast<size_t>(same - controls.begin()));
+            continue;
+        }
         controls.push_back(control);
     }
     RECT client = {};
@@ -646,6 +658,14 @@ void FitDialogText(HWND dialog)
         if (!EqualRect(&control.rect, &control.initial))
         {
             SetWindowPos(control.hwnd, nullptr, control.rect.left, control.rect.top, width(control.rect), control.rect.bottom - control.rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+    }
+    for (const auto& [hwnd, index] : overlays)
+    {
+        const Control& group = controls[index];
+        if (!EqualRect(&group.rect, &group.initial))
+        {
+            SetWindowPos(hwnd, nullptr, group.rect.left, group.rect.top, width(group.rect), group.rect.bottom - group.rect.top, SWP_NOZORDER | SWP_NOACTIVATE);
         }
     }
 }

@@ -39,9 +39,10 @@ bool IsBuiltInThemePreset(std::wstring_view name)
     return std::any_of(builtins.begin(), builtins.end(), [&](const ThemePreset& preset) { return EqualName(preset.name, name); });
 }
 
-// preset reader trims names
+// a name is one line of the preset file and the reader trims it
 std::wstring Trimmed(std::wstring text)
 {
+    std::erase_if(text, [](wchar_t character) { return character < 0x20 || character == 0x7F; });
     const auto space = [](wchar_t character) { return iswspace(character) != 0; };
     text.erase(text.begin(), std::find_if_not(text.begin(), text.end(), space));
     text.erase(std::find_if_not(text.rbegin(), text.rend(), space).base(), text.end());
@@ -361,7 +362,12 @@ class PresetEditor final : public DialogWindow
         }
         for (ThemePreset& preset : imported)
         {
-            preset.name = Unique(Trimmed(preset.name));
+            const std::wstring name = Trimmed(preset.name);
+            if (name.empty())
+            {
+                continue;
+            }
+            preset.name = Unique(name);
             presets_.push_back(std::move(preset));
         }
         selected_ = static_cast<int>(presets_.size()) - 1;

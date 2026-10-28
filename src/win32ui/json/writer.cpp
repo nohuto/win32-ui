@@ -3,10 +3,12 @@
 
 #include "win32ui/json/writer.h"
 
+#include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cwchar>
 #include <iterator>
-#include <locale.h>
+#include <limits>
 #include <utility>
 
 namespace win32ui
@@ -21,10 +23,11 @@ std::wstring FormatFixed(double value, int digits)
     {
         return L"";
     }
-    static const _locale_t invariant = _create_locale(LC_NUMERIC, "C");
-    wchar_t buffer[64] = {};
-    _swprintf_s_l(buffer, std::size(buffer), L"%.*f", invariant, digits, value);
-    return buffer;
+    constexpr int kMaxDigits = 16;
+    constexpr int kIntegerDigits = std::numeric_limits<double>::max_exponent10 + 1;
+    char buffer[1 + kIntegerDigits + 1 + kMaxDigits] = {};
+    const auto result = std::to_chars(std::begin(buffer), std::end(buffer), value, std::chars_format::fixed, std::clamp(digits, 0, kMaxDigits));
+    return result.ec == std::errc{} ? std::wstring(buffer, result.ptr) : L"";
 }
 
 } // namespace
@@ -90,7 +93,7 @@ void JsonWriter::BeginObject(std::wstring_view key)
 {
     Prefix(key);
     out_ += L"{";
-    stack_.push_back(true);
+    stack_.push_back({true});
 }
 
 void JsonWriter::EndObject()
@@ -102,7 +105,7 @@ void JsonWriter::BeginArray(std::wstring_view key)
 {
     Prefix(key);
     out_ += L"[";
-    stack_.push_back(true);
+    stack_.push_back({false});
 }
 
 void JsonWriter::EndArray()
@@ -158,11 +161,11 @@ void JsonWriter::Prefix(std::wstring_view key)
 {
     if (!stack_.empty())
     {
-        out_ += stack_.back() ? L"\n" : L",\n";
-        stack_.back() = false;
+        out_ += stack_.back().first ? L"\n" : L",\n";
+        stack_.back().first = false;
         out_.append(stack_.size() * 2, L' ');
     }
-    if (!key.empty())
+    if (!stack_.empty() && stack_.back().object)
     {
         AppendJsonString(&out_, key);
         out_ += L": ";
@@ -171,7 +174,7 @@ void JsonWriter::Prefix(std::wstring_view key)
 
 void JsonWriter::Close(wchar_t bracket)
 {
-    const bool empty = stack_.back();
+    const bool empty = stack_.back().first;
     stack_.pop_back();
     if (!empty)
     {

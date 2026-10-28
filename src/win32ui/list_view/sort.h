@@ -17,10 +17,14 @@ using SortKeys = std::vector<std::pair<int, bool>>;
 template <typename Compare>
 int CompareSorted(int column, bool ascending, const SortKeys& earlier, Compare compare)
 {
-    int result = ascending ? compare(column) : -compare(column);
+    int result = compare(column);
+    result = (result > 0) - (result < 0);
+    result = ascending ? result : -result;
     for (size_t i = 0; result == 0 && i < earlier.size(); ++i)
     {
-        result = earlier[i].second ? compare(earlier[i].first) : -compare(earlier[i].first);
+        result = compare(earlier[i].first);
+        result = (result > 0) - (result < 0);
+        result = earlier[i].second ? result : -result;
     }
     return result;
 }

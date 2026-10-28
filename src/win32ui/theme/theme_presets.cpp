@@ -319,11 +319,15 @@ std::wstring FormatThemePresets(const std::vector<ThemePreset>& presets)
     std::wstring content;
     for (const ThemePreset& preset : presets)
     {
-        if (preset.name.empty())
+        // a name is one line and the reader trims it, one that trims to nothing is skipped like an empty one
+        std::wstring line = preset.name;
+        std::replace_if(line.begin(), line.end(), [](wchar_t character) { return character < 0x20 || character == 0x7F; }, L' ');
+        const std::wstring_view name = Trim(line);
+        if (name.empty())
         {
             continue;
         }
-        content.append(kPresetSection).append(L"\r\nname=").append(preset.name);
+        content.append(kPresetSection).append(L"\r\nname=").append(name);
         content.append(preset.colors.dark ? L"\r\ndark=1\r\n" : L"\r\ndark=0\r\n");
         for (const ColorField& field : kColorFields)
         {
@@ -441,15 +445,40 @@ bool ParseThemeColor(std::wstring_view text, COLORREF* color)
     }
     if (text.find(L',') != std::wstring_view::npos)
     {
-        const std::wstring value(text);
-        unsigned red = 0;
-        unsigned green = 0;
-        unsigned blue = 0;
-        int consumed = 0;
-        if (swscanf_s(value.c_str(), L"%u,%u,%u%n", &red, &green, &blue, &consumed) == 3 &&
-            static_cast<size_t>(consumed) == value.size() && red <= 255 && green <= 255 && blue <= 255)
+        unsigned values[3] = {};
+        for (size_t index = 0; index < std::size(values); ++index)
         {
-            *color = RGB(red, green, blue);
+            // whitespace may come before a component, not before its comma
+            while (!text.empty() && iswspace(text.front()))
+            {
+                text.remove_prefix(1);
+            }
+            size_t digits = 0;
+            while (!text.empty() && text.front() >= L'0' && text.front() <= L'9')
+            {
+                if (++digits > 3)
+                {
+                    return false;
+                }
+                values[index] = values[index] * 10 + static_cast<unsigned>(text.front() - L'0');
+                text.remove_prefix(1);
+            }
+            if (digits == 0 || values[index] > 255)
+            {
+                return false;
+            }
+            if (index + 1 < std::size(values))
+            {
+                if (text.empty() || text.front() != L',')
+                {
+                    return false;
+                }
+                text.remove_prefix(1);
+            }
+        }
+        if (text.empty())
+        {
+            *color = RGB(values[0], values[1], values[2]);
             return true;
         }
     }

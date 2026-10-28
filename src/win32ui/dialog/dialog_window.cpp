@@ -34,7 +34,9 @@ constexpr DWORD kDialogDpiDisableAll = 0x0001;
 // object pointer follows the dialog manager window bytes
 constexpr int kObjectOffset = (DLGWINDOWEXTRA + 7) & ~7;
 
-const wchar_t* g_class_name = nullptr;
+std::wstring g_class_name;
+ATOM g_class_atom = 0;
+HINSTANCE g_class_instance = nullptr;
 const DialogTheme* g_theme = nullptr;
 bool g_caption_icon = false;
 int g_modal_depth = 0;
@@ -127,10 +129,10 @@ bool PressDefaultOnReturn(HWND dialog, const MSG& message)
     return true;
 }
 
-// loads executable DIALOGEX resource name with the UI font and registered class
+// loads DIALOGEX resource name from the module that registered the class, with the UI font and that class
 std::vector<BYTE> LoadDialogTemplate(const wchar_t* name)
 {
-    const HINSTANCE instance = GetModuleHandleW(nullptr);
+    const HINSTANCE instance = g_class_instance;
     const HRSRC resource = FindResourceW(instance, name, RT_DIALOG);
     const HGLOBAL loaded = resource ? LoadResource(instance, resource) : nullptr;
     const auto* data = loaded ? static_cast<const BYTE*>(LockResource(loaded)) : nullptr;
@@ -182,7 +184,7 @@ std::vector<BYTE> LoadDialogTemplate(const wchar_t* name)
     const auto append = [&](const void* bytes, size_t count) {
         patched.insert(patched.end(), static_cast<const BYTE*>(bytes), static_cast<const BYTE*>(bytes) + count);
     };
-    append(g_class_name, (std::wcslen(g_class_name) + 1) * sizeof(wchar_t));
+    append(g_class_name.c_str(), (g_class_name.size() + 1) * sizeof(wchar_t));
     append(data + title, font - title);
     const LOGFONTW ui = UIFontLogFont(USER_DEFAULT_SCREEN_DPI);
     const WORD header[] = {static_cast<WORD>(MulDiv(std::abs(ui.lfHeight), 72, USER_DEFAULT_SCREEN_DPI)), static_cast<WORD>(ui.lfWeight), static_cast<WORD>(ui.lfItalic | (ui.lfCharSet << 8))};
@@ -268,7 +270,7 @@ class ProcDialog final : public DialogWindow
 
 bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const DialogTheme* theme, int icon)
 {
-    if (g_class_name)
+    if (g_class_atom)
     {
         return true;
     }
@@ -284,7 +286,8 @@ bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const Di
     }
     window_class.lpszClassName = class_name;
     window_class.cbWndExtra = kObjectOffset + sizeof(void*);
-    if (!RegisterClassExW(&window_class))
+    const ATOM atom = RegisterClassExW(&window_class);
+    if (!atom)
     {
         // small icon isnt shared, class would have owned it
         if (window_class.hIconSm)
@@ -295,6 +298,8 @@ bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const Di
     }
     g_caption_icon = window_class.hIconSm != nullptr || window_class.hIcon != nullptr;
     g_class_name = class_name;
+    g_class_atom = atom;
+    g_class_instance = instance;
     g_theme = theme;
     return true;
 }
@@ -387,8 +392,7 @@ void AnchorDialogControls(HWND dialog, std::initializer_list<AnchorRule> rules)
 
 DialogWindow* DialogWindow::FromWindow(HWND window) noexcept
 {
-    wchar_t name[64] = {};
-    if (!g_class_name || !window || !GetClassNameW(window, name, static_cast<int>(std::size(name))) || std::wcscmp(name, g_class_name) != 0)
+    if (!g_class_atom || !window || GetClassWord(window, GCW_ATOM) != g_class_atom)
     {
         return nullptr;
     }
@@ -431,7 +435,7 @@ void DialogWindow::FinishControls(const std::vector<HWND>& from_template)
 
 bool DialogWindow::CreateTemplateWindow(HWND root_owner, const wchar_t* template_name)
 {
-    if (!g_class_name)
+    if (!g_class_atom)
     {
         return false;
     }
@@ -442,11 +446,14 @@ bool DialogWindow::CreateTemplateWindow(HWND root_owner, const wchar_t* template
     }
     min_width_dip_ = 0;
     min_height_dip_ = 0;
+    created_ = false;
+    done_ = false;
+    result_ = IDCANCEL;
     fonts_.Create(WindowDpi(root_owner));
     // first window message binds the object, WM_INITDIALOG runs layout
     // dialog manager only sends it when a dialog procedure exists, so give an empty one
     g_creating = this;
-    CreateDialogIndirectParamW(GetModuleHandleW(nullptr), reinterpret_cast<const DLGTEMPLATE*>(dialog.data()), root_owner, [](HWND, UINT, WPARAM, LPARAM) -> INT_PTR { return FALSE; }, 0);
+    CreateDialogIndirectParamW(g_class_instance, reinterpret_cast<const DLGTEMPLATE*>(dialog.data()), root_owner, [](HWND, UINT, WPARAM, LPARAM) -> INT_PTR { return FALSE; }, 0);
     g_creating = nullptr;
     return hwnd_ != nullptr;
 }
@@ -573,6 +580,7 @@ bool DialogWindow::OpenModeless(HWND owner, const wchar_t* template_name)
 INT_PTR DialogWindow::RunModal(HWND owner, const wchar_t* template_name)
 {
     const ModalScope modal;
+    modeless_ = false;
     HWND root_owner = owner ? GetAncestor(owner, GA_ROOT) : nullptr;
 
     if (root_owner && !IsWindowEnabled(root_owner) && !OpenDialogs().empty())
