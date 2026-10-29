@@ -31,6 +31,18 @@ LRESULT ColumnModel::Native(HWND list, UINT message, WPARAM wparam, LPARAM lpara
     return result;
 }
 
+// SendMessage pays ~0.7us per subclass layer (a GetProp each) on top of the dispatch, the class procedure ~50ns,
+// another thread must not run the procedure itself
+LRESULT ColumnModel::Direct(HWND list, UINT message, WPARAM wparam, LPARAM lparam) const
+{
+    return Local() ? CallWindowProcW(native_, list, message, wparam, lparam) : SendMessageW(list, message, wparam, lparam);
+}
+
+bool ColumnModel::Local() const
+{
+    return native_ && thread_ == GetCurrentThreadId();
+}
+
 bool ColumnModel::TakeNative(UINT message, WPARAM wparam, LPARAM lparam)
 {
     if (pending_.message == 0 || pending_.message != message || pending_.wparam != wparam || pending_.lparam != lparam)
@@ -62,6 +74,8 @@ void ColumnModel::Rebuild()
 
 void ColumnModel::Load(HWND list)
 {
+    native_ = reinterpret_cast<WNDPROC>(GetClassLongPtrW(list, GCLP_WNDPROC));
+    thread_ = GetWindowThreadProcessId(list, nullptr);
     HWND header = ListView_GetHeader(list);
     const int count = header ? Header_GetItemCount(header) : 0;
     if (count <= 0 || !columns_.empty())
@@ -237,25 +251,31 @@ void ColumnModel::Hide(HWND list, int subitem)
     }
     if (!OwnerData(list))
     {
-        // the native list drops a deleted columns text, keep it by item id so sorting while hidden is safe
-        const int rows = ListView_GetItemCount(list);
+        // the native list drops a deleted columns text, keep it by item id so sorting while hidden is safe, a cell
+        // without text of its own (never set or LPSTR_TEXTCALLBACK) stays out and asks the parent again when read
+        const int rows = static_cast<int>(Direct(list, LVM_GETITEMCOUNT, 0, 0));
         std::vector<wchar_t> buffer(1024);
         for (int row = 0; row < rows; ++row)
         {
-            const UINT id = static_cast<UINT>(Native(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0));
             for (;;)
             {
                 LVITEMW item = {};
+                item.mask = LVIF_TEXT | LVIF_NORECOMPUTE;
+                item.iItem = row;
                 item.iSubItem = position;
                 item.pszText = buffer.data();
                 item.cchTextMax = static_cast<int>(buffer.size());
-                const size_t length = static_cast<size_t>(std::max<LRESULT>(0, Native(list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&item))));
-                if (length + 1 < buffer.size())
+                Direct(list, LVM_GETITEMW, 0, reinterpret_cast<LPARAM>(&item));
+                if (item.pszText == LPSTR_TEXTCALLBACKW)
                 {
-                    if (length)
-                    {
-                        column.texts[id].assign(buffer.data(), length);
-                    }
+                    break;
+                }
+                // the list may point at its own copy instead of filling the buffer
+                const bool own = item.pszText != buffer.data();
+                const size_t length = own ? (item.pszText ? std::wcslen(item.pszText) : 0) : wcsnlen_s(buffer.data(), buffer.size());
+                if (own || length + 1 < buffer.size())
+                {
+                    column.texts[static_cast<UINT>(Direct(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0))].assign(item.pszText ? item.pszText : L"", length);
                     break;
                 }
                 buffer.resize(buffer.size() * 2);
@@ -289,15 +309,19 @@ void ColumnModel::Show(HWND list, int subitem, int width)
     }
     column.shown = true;
     Rebuild();
-    for (auto entry = column.texts.begin(); entry != column.texts.end(); ++entry)
+    // LVM_MAPIDTOINDEX searches the rows linearly, walking the rows once keeps this O(n)
+    const int rows = column.texts.empty() ? 0 : static_cast<int>(Direct(list, LVM_GETITEMCOUNT, 0, 0));
+    size_t restored = 0;
+    for (int row = 0; row < rows && restored < column.texts.size(); ++row)
     {
-        const int row = static_cast<int>(Native(list, LVM_MAPIDTOINDEX, entry->first, 0));
-        if (row >= 0)
+        const auto entry = column.texts.find(static_cast<UINT>(Direct(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0)));
+        if (entry != column.texts.end())
         {
             LVITEMW text = {};
             text.iSubItem = position;
             text.pszText = entry->second.data();
-            Native(list, LVM_SETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&text));
+            Direct(list, LVM_SETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&text));
+            ++restored;
         }
     }
     column.texts.clear();
@@ -332,14 +356,15 @@ bool ColumnModel::HiddenText(HWND list, UINT message, LVITEMW* item, LRESULT* re
             *result = TRUE;
             return true;
         }
-        const UINT id = static_cast<UINT>(Native(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0));
-        if (item->pszText && item->pszText != LPSTR_TEXTCALLBACKW && item->pszText[0])
+        // like the native list, null text is empty text and LPSTR_TEXTCALLBACK leaves the cell to the parent
+        const UINT id = static_cast<UINT>(Direct(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0));
+        if (item->pszText == LPSTR_TEXTCALLBACKW)
         {
-            column.texts[id] = item->pszText;
+            column.texts.erase(id);
         }
         else
         {
-            column.texts.erase(id);
+            column.texts[id] = item->pszText ? item->pszText : L"";
         }
         *result = TRUE;
         return true;
@@ -349,14 +374,26 @@ bool ColumnModel::HiddenText(HWND list, UINT message, LVITEMW* item, LRESULT* re
         *result = TRUE;
         return true;
     }
+    const auto found = OwnerData(list) ? column.texts.end() : column.texts.find(static_cast<UINT>(Direct(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0)));
+    if (found == column.texts.end() && message == LVM_GETITEMW && (item->mask & LVIF_NORECOMPUTE))
+    {
+        item->pszText = LPSTR_TEXTCALLBACKW;
+        *result = TRUE;
+        return true;
+    }
     if (!item->pszText || item->cchTextMax <= 0)
     {
         *result = 0;
         return true;
     }
     std::wstring text;
-    if (OwnerData(list))
+    if (found != column.texts.end())
     {
+        text = found->second;
+    }
+    else
+    {
+        // owner data cells and cells without text of their own come from the parent, in subitem numbers
         NMLVDISPINFOW info = {};
         info.hdr.hwndFrom = list;
         info.hdr.idFrom = static_cast<UINT_PTR>(GetDlgCtrlID(list));
@@ -364,22 +401,37 @@ bool ColumnModel::HiddenText(HWND list, UINT message, LVITEMW* item, LRESULT* re
         info.item.mask = LVIF_TEXT;
         info.item.iItem = row;
         info.item.iSubItem = item->iSubItem;
+        if (!OwnerData(list))
+        {
+            LVITEMW data = {};
+            data.mask = LVIF_PARAM;
+            data.iItem = row;
+            Direct(list, LVM_GETITEMW, 0, reinterpret_cast<LPARAM>(&data));
+            info.item.lParam = data.lParam;
+        }
         info.item.pszText = item->pszText;
         info.item.cchTextMax = item->cchTextMax;
         item->pszText[0] = L'\0';
         const NMHDR* outer = raw_notify_;
         raw_notify_ = &info.hdr;
         SendMessageW(GetParent(list), WM_NOTIFY, info.hdr.idFrom, reinterpret_cast<LPARAM>(&info));
+        // parent can destroy the list and this model with it
+        if (!IsWindow(list))
+        {
+            *result = 0;
+            return true;
+        }
         raw_notify_ = outer;
         if (info.item.pszText && info.item.pszText != LPSTR_TEXTCALLBACKW)
         {
             text = info.item.pszText;
         }
-    }
-    else
-    {
-        const auto found = column.texts.find(static_cast<UINT>(Native(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0)));
-        text = found == column.texts.end() ? std::wstring() : found->second;
+        // LVIF_DI_SETITEM makes the answer the cells own text, as in a shown column
+        const size_t subitem = static_cast<size_t>(item->iSubItem);
+        if ((info.item.mask & LVIF_DI_SETITEM) && !OwnerData(list) && subitem < columns_.size() && !columns_[subitem].shown)
+        {
+            columns_[subitem].texts[static_cast<UINT>(Direct(list, LVM_MAPINDEXTOID, static_cast<WPARAM>(row), 0))] = text;
+        }
     }
     const size_t length = std::min(text.size(), static_cast<size_t>(item->cchTextMax - 1));
     std::wmemcpy(item->pszText, text.data(), length);
@@ -676,7 +728,7 @@ bool ColumnModel::Translate(HWND list, UINT message, WPARAM wparam, LPARAM lpara
     case LVM_DELETEITEM:
         if (AnyHidden() && !OwnerData(list))
         {
-            const UINT id = static_cast<UINT>(Native(list, LVM_MAPINDEXTOID, wparam, 0));
+            const UINT id = static_cast<UINT>(Direct(list, LVM_MAPINDEXTOID, wparam, 0));
             for (Column& column : columns_)
             {
                 column.texts.erase(id);

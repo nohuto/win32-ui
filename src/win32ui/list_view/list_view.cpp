@@ -15,6 +15,7 @@
 #include "win32ui/window_metrics.h"
 
 #include <algorithm>
+#include <climits>
 #include <cwctype>
 #include <iterator>
 #include <memory>
@@ -30,7 +31,6 @@ namespace
 {
 
 constexpr UINT_PTR kListSubclassId = 1;
-constexpr UINT_PTR kHeaderSubclassId = 1;
 constexpr UINT_PTR kParentSubclassId = 0x4C56;
 constexpr int kHeaderTextPadding = 8;
 constexpr int kDefaultWidthDip = 100;
@@ -67,25 +67,122 @@ struct ListState
     HWND grid_button = nullptr;
     HIMAGELIST grid_images = nullptr;
     std::vector<int> grid_edges;
+    bool grid_rows = false;
     HWND tip = nullptr;
     std::wstring tip_text;
     int tip_row = -1;
     int tip_column = -1;
     bool resize_posted = false;
+    int paint_batches = 0;
+    bool paint_skipped = false;
+    LONG paint_left = 0;
+    int paint_scroll = 0;
 };
 
 // one grid setting for every attached list
 bool g_grid_lines = false;
 std::vector<HWND> g_lists;
 
+struct AttachedList
+{
+    HWND list;
+    ListState* state;
+};
+
+// the lists this thread attached, GetWindowSubclass costs a GetProp kernel call on every custom draw notification
+thread_local std::vector<AttachedList> t_attached;
+
+struct SubclassedHeader
+{
+    HWND header;
+    WNDPROC next;
+    ListState* state;
+};
+
+// the native list asks its header for every columns rectangle in each hit test and paint, a SetWindowSubclass layer
+// adds GetProp kernel calls to each, a header has no comctl32 chain so a plain window procedure keeps app subclass order
+thread_local std::vector<SubclassedHeader> t_headers;
+
 LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data);
-LRESULT CALLBACK HeaderProc(HWND header, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data);
+LRESULT CALLBACK HeaderProc(HWND header, UINT message, WPARAM wparam, LPARAM lparam);
+void HookParent(HWND list, const ListState* state);
+
+SubclassedHeader* HeaderEntry(HWND header)
+{
+    for (SubclassedHeader& entry : t_headers)
+    {
+        if (entry.header == header)
+        {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
 
 ListState* StateOf(HWND list)
 {
+    for (const AttachedList& entry : t_attached)
+    {
+        if (entry.list == list)
+        {
+            return entry.state;
+        }
+    }
+    // a list is attached on its own thread, only another thread's list can be missing here
     DWORD_PTR data = 0;
-    return list && GetWindowSubclass(list, ListProc, kListSubclassId, &data) ? reinterpret_cast<ListState*>(data) : nullptr;
+    return list && GetWindowThreadProcessId(list, nullptr) != GetCurrentThreadId() && GetWindowSubclass(list, ListProc, kListSubclassId, &data) ? reinterpret_cast<ListState*>(data) : nullptr;
 }
+
+// callbacks and notifications run app code that can destroy the list
+bool Alive(HWND list, const ListState* state)
+{
+    return state ? StateOf(list) == state : IsWindow(list) != FALSE;
+}
+
+// column width change paints the columns right of it at once, a batch of changes skips those paints and invalidates
+// once at its end, from the left edge of the leftmost changed column unless the list scrolled sideways
+class PaintBatch
+{
+  public:
+    // subitem -1 for changes to any column
+    PaintBatch(HWND list, int subitem)
+        : list_(list), state_(StateOf(list))
+    {
+        if (!state_)
+        {
+            return;
+        }
+        RECT column = {};
+        const LONG left = subitem >= 0 && ListColumnRect(list, subitem, &column) ? column.left : LONG_MIN;
+        if (state_->paint_batches++ == 0)
+        {
+            state_->paint_skipped = false;
+            state_->paint_left = left;
+            state_->paint_scroll = GetScrollPos(list, SB_HORZ);
+        }
+        state_->paint_left = std::min(state_->paint_left, left);
+    }
+    ~PaintBatch()
+    {
+        if (!state_ || !Alive(list_, state_) || --state_->paint_batches > 0 || !state_->paint_skipped)
+        {
+            return;
+        }
+        RECT area = {};
+        GetClientRect(list_, &area);
+        if (GetScrollPos(list_, SB_HORZ) == state_->paint_scroll)
+        {
+            area.left = std::max(area.left, state_->paint_left);
+        }
+        InvalidateRect(list_, &area, TRUE);
+    }
+    PaintBatch(const PaintBatch&) = delete;
+    PaintBatch& operator=(const PaintBatch&) = delete;
+
+  private:
+    HWND list_;
+    ListState* state_;
+};
 
 // list and header colors, read from the palette at paint time
 struct ListColors
@@ -387,22 +484,35 @@ void ShowColumnMenu(HWND list, ListState* state, POINT screen)
     ColumnsChanged(list, state);
 }
 
-// keep the largest buffer so consecutive long cells need one message each
+// keep the largest buffer so consecutive long cells need one message each, shown columns of an attached list are
+// read below its subclasses, a hidden column through the column model
 void ReadCell(HWND list, const ListState* state, int row, int subitem, std::vector<wchar_t>* buffer, std::wstring* text)
 {
-    if (state && state->hooks && state->hooks->cell_text && state->hooks->cell_text(state->hooks->context, list, row, subitem, text))
+    if (state && state->hooks && state->hooks->cell_text)
     {
-        return;
+        if (state->hooks->cell_text(state->hooks->context, list, row, subitem, text))
+        {
+            return;
+        }
+        if (!Alive(list, state))
+        {
+            text->clear();
+            return;
+        }
     }
+    // another thread reads through SendMessage, in subitem numbers
+    const int position = state && state->model.Local() ? state->model.Position(subitem) : -1;
     // returned length only counts text that fits, grow the buffer while full
     buffer->resize(std::max<size_t>(buffer->size(), 256));
     LVITEMW item = {};
-    item.iSubItem = subitem;
+    item.iSubItem = position >= 0 ? position : subitem;
     for (;;)
     {
         item.pszText = buffer->data();
         item.cchTextMax = static_cast<int>(buffer->size());
-        const size_t length = static_cast<size_t>(std::max<LRESULT>(0, SendMessageW(list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&item))));
+        const LPARAM pointer = reinterpret_cast<LPARAM>(&item);
+        const LRESULT sent = position >= 0 ? state->model.Direct(list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), pointer) : SendMessageW(list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), pointer);
+        const size_t length = static_cast<size_t>(std::max<LRESULT>(0, sent));
         if (length + 1 < buffer->size() || buffer->size() >= kMaxCellText)
         {
             text->assign(buffer->data(), std::min(length, buffer->size()));
@@ -419,6 +529,10 @@ std::pair<int, int> CellTextWidths(HWND list, int column)
     const int count = ListView_GetItemCount(list);
     const int top = ListView_GetTopIndex(list);
     const int last = top + ListView_GetCountPerPage(list);
+    if (state)
+    {
+        HookParent(list, state);
+    }
     HDC dc = GetDC(list);
     const HFONT font = reinterpret_cast<HFONT>(SendMessageW(list, WM_GETFONT, 0, 0));
     const HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
@@ -429,6 +543,10 @@ std::pair<int, int> CellTextWidths(HWND list, int column)
     for (int row = 0; row < count; ++row)
     {
         ReadCell(list, state, row, column, &buffer, &text);
+        if (!Alive(list, state))
+        {
+            break;
+        }
         SIZE size = {};
         GetTextExtentPoint32W(dc, text.c_str(), static_cast<int>(text.size()), &size);
         all = std::max(all, static_cast<int>(size.cx));
@@ -495,9 +613,14 @@ bool TypeToSelect(HWND list, ListState* state, wchar_t character)
     std::vector<wchar_t> buffer;
     std::wstring text;
     std::wstring nearest_text;
+    HookParent(list, state);
     for (int row = 0; row < count && match < 0; ++row)
     {
         ReadCell(list, state, row, 0, &buffer, &text);
+        if (!Alive(list, state))
+        {
+            return true;
+        }
         if (StartsWith(text, state->typed))
         {
             match = row;
@@ -710,23 +833,56 @@ void PaintGrid(HWND list, const ListState* state, HDC hdc, const RECT& area, int
     }
 }
 
-// continue grid below the last row
-void PaintGridTail(HWND list, const ListState* state, HDC hdc)
+// the client area below the header
+bool BelowHeader(HWND list, RECT* area)
 {
     HWND header = ListView_GetHeader(list);
-    RECT client = {};
     RECT header_rect = {};
-    if (!header || !GetClientRect(list, &client) || !GetWindowRect(header, &header_rect))
+    if (!header || !GetClientRect(list, area) || !GetWindowRect(header, &header_rect))
+    {
+        return false;
+    }
+    MapWindowPoints(nullptr, list, reinterpret_cast<POINT*>(&header_rect), 2);
+    area->top = std::max<LONG>(area->top, header_rect.bottom);
+    return true;
+}
+
+bool ItemBounds(HWND list, const ListState* state, int row, RECT* rect)
+{
+    *rect = {LVIR_BOUNDS};
+    return state->model.Direct(list, LVM_GETITEMRECT, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(rect)) != FALSE;
+}
+
+// report rows are evenly spaced, the whole grid goes on once per paint from the top shown row down at its pitch
+void PaintGridOnce(HWND list, const ListState* state, HDC hdc)
+{
+    RECT area = {};
+    RECT row = {};
+    if (!BelowHeader(list, &area))
     {
         return;
     }
-    MapWindowPoints(nullptr, list, reinterpret_cast<POINT*>(&header_rect), 2);
-    RECT area = client;
-    area.top = std::max<LONG>(area.top, header_rect.bottom);
-    int row_height = 0;
-    const int count = ListView_GetItemCount(list);
+    if (state->model.Direct(list, LVM_GETITEMCOUNT, 0, 0) > 0 && ItemBounds(list, state, static_cast<int>(state->model.Direct(list, LVM_GETTOPINDEX, 0, 0)), &row))
+    {
+        area.top = row.top;
+        PaintGrid(list, state, hdc, area, row.bottom - 1, row.bottom - row.top);
+        return;
+    }
+    PaintGrid(list, state, hdc, area, area.top, 0);
+}
+
+// group view rows draw their own lines, below the last row the grid goes on at its pitch
+void PaintGridTail(HWND list, const ListState* state, HDC hdc)
+{
+    RECT area = {};
     RECT last = {};
-    if (count > 0 && ListView_GetItemRect(list, count - 1, &last, LVIR_BOUNDS))
+    if (!BelowHeader(list, &area))
+    {
+        return;
+    }
+    const int count = static_cast<int>(state->model.Direct(list, LVM_GETITEMCOUNT, 0, 0));
+    int row_height = 0;
+    if (count > 0 && ItemBounds(list, state, count - 1, &last))
     {
         row_height = last.bottom - last.top;
         area.top = std::max(area.top, last.bottom);
@@ -741,15 +897,28 @@ void AddCellTip(HWND list, ListState* state)
     {
         return;
     }
+    // ListProc relays the mouse, TTF_SUBCLASS would add a subclass layer to every message of the list
     TOOLINFOW info = {};
     info.cbSize = sizeof(info);
-    info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+    info.uFlags = TTF_IDISHWND;
     info.hwnd = list;
     info.uId = reinterpret_cast<UINT_PTR>(list);
     info.lpszText = LPSTR_TEXTCALLBACKW;
     SendMessageW(state->tip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
     SendMessageW(state->tip, TTM_SETMAXTIPWIDTH, 0, Scale(kTipMaxWidth, WindowDpi(list)));
     ApplyFrame(state->hooks, state->tip);
+}
+
+// the messages TTF_SUBCLASS relays, all client mouse messages, WM_NCMOUSEMOVE and WM_MOUSELEAVE
+void RelayToTip(HWND list, HWND tip, UINT message, WPARAM wparam, LPARAM lparam)
+{
+    if ((message < WM_MOUSEFIRST || message > WM_MOUSELAST) && message != WM_NCMOUSEMOVE && message != WM_MOUSELEAVE)
+    {
+        return;
+    }
+    const DWORD position = GetMessagePos();
+    MSG relayed = {list, message, wparam, lparam, static_cast<DWORD>(GetMessageTime()), {GET_X_LPARAM(position), GET_Y_LPARAM(position)}};
+    SendMessageW(tip, TTM_RELAYEVENT, static_cast<WPARAM>(GetMessageExtraInfo()), reinterpret_cast<LPARAM>(&relayed));
 }
 
 // full hovered cell text when truncated, otherwise empty
@@ -764,7 +933,12 @@ std::wstring CellTipText(HWND list, const ListState* state)
     }
     std::vector<wchar_t> buffer;
     std::wstring text;
+    HookParent(list, state);
     ReadCell(list, state, row, column, &buffer, &text);
+    if (!Alive(list, state))
+    {
+        return {};
+    }
     const int available = static_cast<int>(cell.right - cell.left) - Scale(column == 0 ? kTipLabelInset : kTipCellInset, WindowDpi(list));
     if (text.empty() || available <= 0 || (text.size() <= kTipMeasureLimit && ListView_GetStringWidth(list, text.c_str()) <= available))
     {
@@ -818,9 +992,16 @@ void PlaceCellTip(HWND list, const ListState* state)
     SetWindowPos(state->tip, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
-LRESULT CALLBACK HeaderProc(HWND header, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data)
+LRESULT CALLBACK HeaderProc(HWND header, UINT message, WPARAM wparam, LPARAM lparam)
 {
-    auto* state = reinterpret_cast<ListState*>(data);
+    const SubclassedHeader* entry = HeaderEntry(header);
+    if (!entry)
+    {
+        return DefWindowProcW(header, message, wparam, lparam);
+    }
+    // copies, a menu loop below can change the registry
+    const WNDPROC next = entry->next;
+    ListState* state = entry->state;
     switch (message)
     {
     case WM_ERASEBKGND:
@@ -853,12 +1034,12 @@ LRESULT CALLBACK HeaderProc(HWND header, UINT message, WPARAM wparam, LPARAM lpa
         break;
     case WM_NCDESTROY:
         ReleaseHeaderTheme(state);
-        RemoveWindowSubclass(header, HeaderProc, kHeaderSubclassId);
+        std::erase_if(t_headers, [&](const SubclassedHeader& item) { return item.header == header; });
         break;
     default:
         break;
     }
-    return DefSubclassProc(header, message, wparam, lparam);
+    return CallWindowProcW(next, header, message, wparam, lparam);
 }
 
 // grid edges are cached per paint, horizontal scrolling repaints everything
@@ -918,10 +1099,14 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     }
     if (LRESULT translated = 0; state->model.Translate(list, message, wparam, lparam, &translated))
     {
-        HookParent(list, state);
+        // a translated message can notify the parent, which can destroy the list
+        if (Alive(list, state))
+        {
+            HookParent(list, state);
+        }
         return translated;
     }
-    if (message == ColumnsResizedMessage() && state->resize_posted)
+    if (state->resize_posted && message == ColumnsResizedMessage())
     {
         state->resize_posted = false;
         if (static_cast<size_t>(state->model.Count()) == state->shown_dip.size() && !state->shown_dip.empty())
@@ -939,7 +1124,17 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     }
     if (message == WM_PAINT)
     {
+        // the region stays invalid, the batch invalidates what it moved and the next paint covers both
+        if (state->paint_batches > 0)
+        {
+            state->paint_skipped = true;
+            return 0;
+        }
         HookParent(list, state);
+    }
+    if (state->tip)
+    {
+        RelayToTip(list, state->tip, message, wparam, lparam);
     }
     switch (message)
     {
@@ -965,7 +1160,12 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             }
             if (state->tip && header->hwndFrom == state->tip && header->code == TTN_GETDISPINFOW)
             {
-                state->tip_text = CellTipText(list, state);
+                std::wstring text = CellTipText(list, state);
+                if (!Alive(list, state))
+                {
+                    return 0;
+                }
+                state->tip_text = std::move(text);
                 reinterpret_cast<NMTTDISPINFOW*>(lparam)->lpszText = state->tip_text.data();
                 return 0;
             }
@@ -1021,8 +1221,8 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
         {
             LVHITTESTINFO hit = {};
             hit.pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
-            const int row = ListView_SubItemHitTest(list, &hit);
-            const int column = row >= 0 ? hit.iSubItem : -1;
+            const int row = static_cast<int>(state->model.Direct(list, LVM_SUBITEMHITTEST, 0, reinterpret_cast<LPARAM>(&hit)));
+            const int column = row >= 0 ? state->model.Subitem(hit.iSubItem) : -1;
             if (row != state->tip_row || column != state->tip_column)
             {
                 // restart tooltip delay for each cell
@@ -1137,6 +1337,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             DestroyWindow(state->tip);
         }
         std::erase(g_lists, list);
+        std::erase_if(t_attached, [&](const AttachedList& entry) { return entry.list == list; });
         RemoveWindowSubclass(list, ListProc, kListSubclassId);
         delete state;
         break;
@@ -1171,14 +1372,19 @@ bool Attach(HWND list, const ListViewHooks* hooks, DWORD extra_styles, bool dial
         }
         state = created.release();
         g_lists.push_back(list);
+        t_attached.push_back({list, state});
     }
     state->hooks = hooks;
     state->dialog_keys = state->dialog_keys || dialog_keys;
     state->model.Load(list);
     HWND header = ListView_GetHeader(list);
-    if (header && !GetWindowSubclass(header, HeaderProc, kHeaderSubclassId, nullptr))
+    if (header && !HeaderEntry(header))
     {
-        SetWindowSubclass(header, HeaderProc, kHeaderSubclassId, reinterpret_cast<DWORD_PTR>(state));
+        t_headers.push_back({header, reinterpret_cast<WNDPROC>(GetWindowLongPtrW(header, GWLP_WNDPROC)), state});
+        if (!SetWindowLongPtrW(header, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(HeaderProc)))
+        {
+            t_headers.pop_back();
+        }
     }
     HideFocusRectangle(list);
     RememberWidths(list, state);
@@ -1299,20 +1505,28 @@ LRESULT DrawListGrid(HWND list, NMLVCUSTOMDRAW* draw, LRESULT result)
     {
     case CDDS_PREPAINT:
         ReadGridEdges(list, state);
-        return result | CDRF_NOTIFYITEMDRAW | CDRF_NOTIFYPOSTPAINT;
+        state->grid_rows = state->model.Direct(list, LVM_ISGROUPVIEWENABLED, 0, 0) != 0;
+        return result | CDRF_NOTIFYPOSTPAINT | (state->grid_rows ? CDRF_NOTIFYITEMDRAW : 0);
     case CDDS_ITEMPREPAINT:
-        return result | CDRF_NOTIFYPOSTPAINT;
+        return state->grid_rows ? result | CDRF_NOTIFYPOSTPAINT : result;
     case CDDS_ITEMPOSTPAINT:
         {
             RECT row = {};
-            if (ListView_GetItemRect(list, static_cast<int>(draw->nmcd.dwItemSpec), &row, LVIR_BOUNDS))
+            if (state->grid_rows && ItemBounds(list, state, static_cast<int>(draw->nmcd.dwItemSpec), &row))
             {
                 PaintGrid(list, state, draw->nmcd.hdc, row, row.bottom - 1, row.bottom - row.top);
             }
             return result;
         }
     case CDDS_POSTPAINT:
-        PaintGridTail(list, state, draw->nmcd.hdc);
+        if (state->grid_rows)
+        {
+            PaintGridTail(list, state, draw->nmcd.hdc);
+        }
+        else
+        {
+            PaintGridOnce(list, state, draw->nmcd.hdc);
+        }
         return result;
     default:
         return result;
@@ -1362,6 +1576,7 @@ void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
     const int existing = ColumnCount(list);
     HWND header = ListView_GetHeader(list);
     const ListState* model_state = StateOf(list);
+    PaintBatch batch(list, -1);
     const auto position = [&](int subitem) { return model_state ? model_state->model.Position(subitem) : subitem; };
     for (size_t index = 0; index < columns.size(); ++index)
     {
@@ -1477,6 +1692,8 @@ int FitListColumn(HWND list, int column)
         return ListView_GetColumnWidth(list, column);
     }
     const std::wstring title = ColumnTitle(list, column);
+    // the native fit and the final width would each paint the columns right of this one
+    PaintBatch batch(list, column);
     ListView_SetColumnWidth(list, column, LVSCW_AUTOSIZE);
     int width = ListView_GetColumnWidth(list, column);
     if (GetWindowLongPtrW(list, GWL_STYLE) & LVS_OWNERDATA)
@@ -1506,17 +1723,28 @@ std::wstring SelectedRowsText(HWND list)
         }
     }
     const ListState* state = StateOf(list);
+    if (state)
+    {
+        HookParent(list, state);
+    }
+    const auto next = [&](int row) {
+        return static_cast<int>(state ? state->model.Direct(list, LVM_GETNEXTITEM, static_cast<WPARAM>(row), MAKELPARAM(LVNI_SELECTED, 0)) : ListView_GetNextItem(list, row, LVNI_SELECTED));
+    };
     std::vector<wchar_t> buffer;
     std::wstring text;
     std::wstring cell;
     bool first = true;
-    for (int row = shown.empty() ? -1 : ListView_GetNextItem(list, -1, LVNI_SELECTED); row >= 0; row = ListView_GetNextItem(list, row, LVNI_SELECTED))
+    for (int row = shown.empty() ? -1 : next(-1); row >= 0; row = next(row))
     {
         text.append(first ? L"" : L"\r\n");
         first = false;
         for (size_t index = 0; index < shown.size(); ++index)
         {
             ReadCell(list, state, row, shown[index], &buffer, &cell);
+            if (!Alive(list, state))
+            {
+                return text;
+            }
             std::replace_if(cell.begin(), cell.end(), [](wchar_t character) { return character == L'\t' || character == L'\r' || character == L'\n'; }, L' ');
             text.append(index ? L"\t" : L"").append(cell);
         }

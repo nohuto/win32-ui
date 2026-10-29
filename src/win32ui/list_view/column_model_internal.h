@@ -30,6 +30,10 @@ class ColumnModel
     int Subitem(int position) const;
     std::wstring Title(int subitem) const;
     void RecordSort(int subitem, int bits);
+    // lists class procedure below every subclass, in native positions, SendMessage from another thread
+    LRESULT Direct(HWND list, UINT message, WPARAM wparam, LPARAM lparam) const;
+    // false on another thread, where Direct sends
+    bool Local() const;
 
   private:
     struct Column
@@ -64,6 +68,8 @@ class ColumnModel
     std::vector<int> subitems_;
     Pending pending_;
     const NMHDR* raw_notify_ = nullptr;
+    WNDPROC native_ = nullptr;
+    DWORD thread_ = 0;
 };
 
 } // namespace win32ui
