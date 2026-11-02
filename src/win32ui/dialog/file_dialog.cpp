@@ -73,7 +73,7 @@ void CloseFileDialog(void* dialog)
 
 HRESULT AddChoices(IFileDialogCustomize* customize, const FileDialogSpec& spec)
 {
-    HRESULT hr = customize->StartVisualGroup(kChoiceGroup, Text(spec.choice_label ? spec.choice_label : L""));
+    HRESULT hr = customize->StartVisualGroup(kChoiceGroup, spec.choice_label ? Text(spec.choice_label) : L"");
     if (SUCCEEDED(hr))
     {
         hr = customize->AddComboBox(kChoiceCombo);
