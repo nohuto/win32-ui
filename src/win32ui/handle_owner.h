@@ -1,8 +1,6 @@
 // Copyright (C) 2026 nohuto
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-// each resource type has its own invalid value
-
 #pragma once
 
 #include <windows.h>
@@ -92,10 +90,10 @@ struct HandleTraitsBase
     }
 };
 
-} // namespace detail
+}
 
-// CreateEvent, CreateThread, OpenThread and OpenProcess fail with NULL
-// INVALID_HANDLE_VALUE also names the current process pseudo handle, which must never be closed
+// CreateEvent, CreateThread, OpenThread and OpenProcess fail with NULL, INVALID_HANDLE_VALUE also names the current
+// process pseudo handle, which must never be closed
 struct KernelHandleTraits : detail::HandleTraitsBase<CloseHandle>
 {
     static HANDLE invalid() noexcept
@@ -104,7 +102,6 @@ struct KernelHandleTraits : detail::HandleTraitsBase<CloseHandle>
     }
 };
 
-// CreateFile returns INVALID_HANDLE_VALUE on failure
 struct FileHandleTraits : detail::HandleTraitsBase<CloseHandle>
 {
     static HANDLE invalid() noexcept
@@ -113,7 +110,6 @@ struct FileHandleTraits : detail::HandleTraitsBase<CloseHandle>
     }
 };
 
-// FindFirstFile fails with INVALID_HANDLE_VALUE and needs FindClose
 struct FindHandleTraits : detail::HandleTraitsBase<FindClose>
 {
     static HANDLE invalid() noexcept
@@ -157,7 +153,6 @@ struct GdiObjectTraits
     }
 };
 
-// LocalAlloc memory, including FormatMessage with FORMAT_MESSAGE_ALLOCATE_BUFFER
 template <typename T>
 struct LocalMemoryTraits
 {
@@ -176,7 +171,6 @@ struct LocalMemoryTraits
     }
 };
 
-// CoTaskMemAlloc memory, including IShellItem::GetDisplayName results
 template <typename T>
 struct CoTaskMemoryTraits
 {
@@ -195,7 +189,25 @@ struct CoTaskMemoryTraits
     }
 };
 
-// handles without built in traits, null is empty, Close frees the handle
+// COM interface pointers, one reference
+template <typename T>
+struct ComTraits
+{
+    using type = T*;
+    static T* invalid() noexcept
+    {
+        return nullptr;
+    }
+    static bool valid(T* object) noexcept
+    {
+        return object != nullptr;
+    }
+    static void close(T* object) noexcept
+    {
+        object->Release();
+    }
+};
+
 template <typename T, typename Close>
 struct NullableTraits
 {
@@ -231,6 +243,9 @@ using UniqueLocal = UniqueResource<LocalMemoryTraits<T>>;
 template <typename T>
 using UniqueCoTask = UniqueResource<CoTaskMemoryTraits<T>>;
 
+template <typename T>
+using UniqueCom = UniqueResource<ComTraits<T>>;
+
 template <typename T, typename Close>
 using UniqueNullable = UniqueResource<NullableTraits<T, Close>>;
 
@@ -239,7 +254,7 @@ class ComInit
 {
   public:
     ComInit() noexcept
-        : hr_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED))
+        : hr_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE))
     {
     }
     ~ComInit()
@@ -261,4 +276,4 @@ class ComInit
     HRESULT hr_;
 };
 
-} // namespace win32ui
+}

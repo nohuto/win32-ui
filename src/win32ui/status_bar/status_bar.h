@@ -45,4 +45,4 @@ std::wstring StatusMessage(HWND bar);
 void ShowStatusProgress(HWND bar, int part, bool shown);
 void RefreshStatusBar(HWND bar);
 
-} // namespace win32ui
+}

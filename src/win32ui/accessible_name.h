@@ -14,4 +14,4 @@ void SetAccessibleName(HWND window, std::wstring_view name);
 // call before CoUninitialize
 void ReleaseAccessibility();
 
-} // namespace win32ui
+}

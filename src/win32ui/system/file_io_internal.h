@@ -5,10 +5,11 @@
 
 #include <windows.h>
 
+#include <vector>
+
 namespace win32ui
 {
 
-// metrics from WM_GETFONT
-TEXTMETRICW WindowFontMetrics(HWND window);
+DWORD ReadExactly(HANDLE file, size_t size, std::vector<unsigned char>* bytes);
 
-} // namespace win32ui
+}

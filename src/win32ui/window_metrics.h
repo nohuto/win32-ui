@@ -23,10 +23,13 @@ inline int Unscale(int pixels, UINT dpi)
     return dpi ? MulDiv(pixels, 96, static_cast<int>(dpi)) : pixels;
 }
 
-bool AdjustWindowRectForDpi(RECT* rect, DWORD style, DWORD ex_style, UINT dpi);
+bool AdjustWindowRectForDpi(RECT* rect, DWORD style, DWORD ex_style, UINT dpi, bool menu = false);
 
 int SystemMetricForDpi(int index, UINT dpi);
 
 void ClampToWorkArea(RECT* rect);
 
-} // namespace win32ui
+void RaiseMinTrackSize(HWND window, MINMAXINFO* info, SIZE size_dip, UINT dpi, bool client);
+void ApplySuggestedRect(HWND window, const RECT* suggested);
+
+}

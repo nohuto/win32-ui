@@ -8,7 +8,7 @@
 namespace win32ui
 {
 
-// export newer than the Windows build target, null if module or export is missing
+// for exports newer than the build target
 template <typename Fn>
 Fn ImportProc(HMODULE module, const char* name) noexcept
 {
@@ -22,7 +22,7 @@ Fn ImportProc(const wchar_t* module, const char* name) noexcept
     return ImportProc<Fn>(GetModuleHandleW(module), name);
 }
 
-// RtlGetVersion avoids GetVersionEx manifest dependency, zero means unknown
+// RtlGetVersion avoids GetVersionEx manifest dependency
 inline const RTL_OSVERSIONINFOW& OsVersion() noexcept
 {
     static const RTL_OSVERSIONINFOW version = [] {
@@ -38,4 +38,4 @@ inline const RTL_OSVERSIONINFOW& OsVersion() noexcept
     return version;
 }
 
-} // namespace win32ui
+}

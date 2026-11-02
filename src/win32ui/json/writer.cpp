@@ -30,7 +30,7 @@ std::wstring FormatFixed(double value, int digits)
     return result.ec == std::errc{} ? std::wstring(buffer, result.ptr) : L"";
 }
 
-} // namespace
+}
 
 void AppendJsonString(std::wstring* out, std::wstring_view text)
 {
@@ -184,4 +184,4 @@ void JsonWriter::Close(wchar_t bracket)
     out_.push_back(bracket);
 }
 
-} // namespace win32ui
+}

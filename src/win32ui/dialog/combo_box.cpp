@@ -23,6 +23,21 @@ void SetComboItems(HWND combo, const std::vector<std::wstring>& items)
     }
 }
 
+void SetComboIndex(HWND combo, int index)
+{
+    if (combo && static_cast<int>(SendMessageW(combo, CB_GETCURSEL, 0, 0)) != index)
+    {
+        SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(index), 0);
+        InvalidateRect(combo, nullptr, FALSE);
+    }
+}
+
+bool SelectComboText(HWND combo, const wchar_t* text)
+{
+    const LRESULT index = combo && text && *text ? SendMessageW(combo, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(text)) : CB_ERR;
+    return index != CB_ERR && SendMessageW(combo, CB_SETCURSEL, static_cast<WPARAM>(index), 0) != CB_ERR;
+}
+
 namespace
 {
 
@@ -61,7 +76,7 @@ int WidestItem(HWND combo)
     return widest;
 }
 
-} // namespace
+}
 
 int ComboFitWidth(HWND combo)
 {
@@ -92,4 +107,4 @@ void FitDroppedWidth(HWND combo)
     SendMessageW(combo, CB_SETDROPPEDWIDTH, static_cast<WPARAM>(std::max<int>(rect.right - rect.left, WidestItem(combo) + padding)), 0);
 }
 
-} // namespace win32ui
+}

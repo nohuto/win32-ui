@@ -5,13 +5,16 @@
 
 #include <windows.h>
 
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace win32ui
 {
 
-// earlier sort columns, newest first, used to break ties
+int CompareListText(std::wstring_view left, std::wstring_view right, bool numbers = false);
+
 using SortKeys = std::vector<std::pair<int, bool>>;
 
 template <typename Compare>
@@ -29,12 +32,13 @@ int CompareSorted(int column, bool ascending, const SortKeys& earlier, Compare c
     return result;
 }
 
-// compares one column by item lParam, zero for equal values
 using ListItemCompare = int(CALLBACK*)(LPARAM left, LPARAM right, int column, void* context);
+
+using TextRows = std::vector<std::vector<std::wstring>>;
+int CALLBACK CompareTextRows(LPARAM left, LPARAM right, int column, void* rows);
 
 void UpdateListSortState(int column, bool toggle, int* sort_column, bool* ascending, SortKeys* earlier);
 bool SortListViewItems(HWND list, int column, bool toggle, int* sort_column, bool* ascending, SortKeys* earlier, ListItemCompare compare, void* context);
-// sort arrow for logical subitem column
 void UpdateListViewSort(HWND list, int column, bool ascending);
 
-} // namespace win32ui
+}

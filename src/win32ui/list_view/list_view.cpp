@@ -5,13 +5,17 @@
 
 #include "win32ui/dialog/dialog_layout_internal.h"
 #include "win32ui/dialog/message_dialog.h"
+#include "win32ui/dialog/tooltip.h"
 #include "win32ui/gdi/buffered_paint.h"
 #include "win32ui/gdi/gdi_cache.h"
 #include "win32ui/gdi/icon_loader.h"
 #include "win32ui/list_view/column_model_internal.h"
 #include "win32ui/list_view/list_view_internal.h"
 #include "win32ui/menu/popup_menu.h"
+#include "win32ui/system/strings.h"
+#include "win32ui/text/text.h"
 #include "win32ui/theme/palette.h"
+#include "win32ui/window.h"
 #include "win32ui/window_metrics.h"
 
 #include <algorithm>
@@ -38,15 +42,15 @@ constexpr int kMenuFitColumn = 1;
 constexpr int kMenuFitAll = 2;
 constexpr int kMenuReset = 3;
 constexpr int kMenuColumnBase = 16;
-constexpr int kMenuCopy = 1;
-constexpr int kMenuSelectAll = 2;
+// above the ids of app row menus
+constexpr UINT kMenuCopy = 0x7F00;
+constexpr UINT kMenuSelectAll = 0x7F01;
 constexpr size_t kMaxCellText = size_t{1} << 20;
 constexpr DWORD kTypeTimeoutMs = 1000;
 constexpr int kGridButtonWidth = 22;
 constexpr int kGridGlyphSize = 16;
 constexpr int kGridCommand = 1;
 constexpr int kTipMaxWidth = 900;
-constexpr int kTipCursorGap = 18;
 // treat longer text as truncated without measuring it
 constexpr size_t kTipMeasureLimit = 512;
 constexpr size_t kTipTextLimit = 2000;
@@ -79,9 +83,12 @@ struct ListState
     int paint_scroll = 0;
 };
 
-// one grid setting for every attached list
+// one grid setting and grid button icon pair for every attached list
 bool g_grid_lines = false;
 std::vector<HWND> g_lists;
+int g_grid_icons[2] = {};
+void (*g_grid_changed)(void* context, bool shown) = nullptr;
+void* g_grid_changed_context = nullptr;
 
 struct AttachedList
 {
@@ -89,7 +96,7 @@ struct AttachedList
     ListState* state;
 };
 
-// the lists this thread attached, GetWindowSubclass costs a GetProp kernel call on every custom draw notification
+// lists this thread attached, GetWindowSubclass costs a GetProp kernel call on every custom draw notification
 thread_local std::vector<AttachedList> t_attached;
 
 struct SubclassedHeader
@@ -99,8 +106,9 @@ struct SubclassedHeader
     ListState* state;
 };
 
-// the native list asks its header for every columns rectangle in each hit test and paint, a SetWindowSubclass layer
-// adds GetProp kernel calls to each, a header has no comctl32 chain so a plain window procedure keeps app subclass order
+// native list asks its header for the rectangle of every column in each hit test and paint, a SetWindowSubclass layer
+// adds GetProp kernel calls to each, a header has no comctl32 chain so a plain window procedure keeps app subclass
+// order
 thread_local std::vector<SubclassedHeader> t_headers;
 
 LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data);
@@ -128,7 +136,7 @@ ListState* StateOf(HWND list)
             return entry.state;
         }
     }
-    // a list is attached on its own thread, only another thread's list can be missing here
+    // list is attached on its own thread, only a list of another thread can be missing here
     DWORD_PTR data = 0;
     return list && GetWindowThreadProcessId(list, nullptr) != GetCurrentThreadId() && GetWindowSubclass(list, ListProc, kListSubclassId, &data) ? reinterpret_cast<ListState*>(data) : nullptr;
 }
@@ -184,7 +192,6 @@ class PaintBatch
     ListState* state_;
 };
 
-// list and header colors, read from the palette at paint time
 struct ListColors
 {
     // under headers and lists without a background override
@@ -209,12 +216,6 @@ void HideFocusRectangle(HWND list)
     {
         SendMessageW(list, WM_UPDATEUISTATE, MAKEWPARAM(UIS_SET, UISF_HIDEFOCUS), 0);
     }
-}
-
-const wchar_t* LabelOf(const ListState* state, ListLabel label)
-{
-    const wchar_t* text = state && state->hooks && state->hooks->label ? state->hooks->label(label) : nullptr;
-    return text ? text : L"";
 }
 
 void ColumnsChanged(HWND list, const ListState* state)
@@ -288,7 +289,6 @@ void ReleaseHeaderTheme(ListState* state)
     }
 }
 
-// list background, falling back to the panel color
 COLORREF SurfaceColor(HWND list, const ListColors& colors)
 {
     const COLORREF background = ListView_GetBkColor(list);
@@ -428,11 +428,11 @@ void ShowColumnMenu(HWND list, ListState* state, POINT screen)
     {
         return;
     }
-    AppendMenuW(menu, MF_STRING | (column >= 0 ? 0 : MF_GRAYED), kMenuFitColumn, LabelOf(state, ListLabel::fit_column));
-    AppendMenuW(menu, MF_STRING, kMenuFitAll, LabelOf(state, ListLabel::fit_all));
+    AppendMenuW(menu, MF_STRING | (column >= 0 ? 0 : MF_GRAYED), kMenuFitColumn, Text(L"Size column to fit"));
+    AppendMenuW(menu, MF_STRING, kMenuFitAll, Text(L"Size all columns to fit"));
     if (!state->columns.empty())
     {
-        AppendMenuW(menu, MF_STRING, kMenuReset, LabelOf(state, ListLabel::reset_columns));
+        AppendMenuW(menu, MF_STRING, kMenuReset, Text(L"Reset columns"));
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     for (int index = 0; index < count; ++index)
@@ -442,7 +442,7 @@ void ShowColumnMenu(HWND list, ListState* state, POINT screen)
             continue;
         }
         const UINT checked = ListView_GetColumnWidth(list, index) > 0 ? MF_CHECKED : 0;
-        // the first column holds the item text and state
+        // first column holds the item text and state
         const UINT fixed = index == 0 ? MF_GRAYED : 0;
         AppendMenuW(menu, MF_STRING | checked | fixed, static_cast<UINT_PTR>(kMenuColumnBase + index), MenuName(ColumnTitle(list, index)).c_str());
     }
@@ -568,14 +568,16 @@ bool TypedTextAlive(const ListState* state)
     return !state->typed.empty() && GetTickCount() - state->typed_at <= kTypeTimeoutMs;
 }
 
-bool StartsWith(const std::wstring& text, const std::wstring& prefix)
+void SelectOnly(HWND list, int row, bool ensure_visible)
 {
-    return text.size() >= prefix.size() && CompareStringOrdinal(text.data(), static_cast<int>(prefix.size()), prefix.data(), static_cast<int>(prefix.size()), TRUE) == CSTR_EQUAL;
-}
-
-int CompareText(const std::wstring& left, const std::wstring& right)
-{
-    return CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(), static_cast<int>(right.size()), TRUE) - CSTR_EQUAL;
+    ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    // list keeps its anchor otherwise, Shift+arrows would extend from the row clicked before
+    ListView_SetSelectionMark(list, row);
+    if (ensure_visible)
+    {
+        ListView_EnsureVisible(list, row, FALSE);
+    }
 }
 
 // false for non search characters, spaces only extend existing typed text
@@ -621,11 +623,13 @@ bool TypeToSelect(HWND list, ListState* state, wchar_t character)
         {
             return true;
         }
-        if (StartsWith(text, state->typed))
+        // text cut to the typed length, equal is a prefix match, greater means the whole text sorts after it
+        const int order = CompareInsensitive(std::wstring_view(text).substr(0, state->typed.size()), state->typed);
+        if (order == 0)
         {
             match = row;
         }
-        else if (CompareText(text, state->typed) > 0 && (nearest < 0 || CompareText(text, nearest_text) < 0))
+        else if (order > 0 && (nearest < 0 || CompareInsensitive(text, nearest_text) < 0))
         {
             nearest = row;
             nearest_text = text;
@@ -633,10 +637,7 @@ bool TypeToSelect(HWND list, ListState* state, wchar_t character)
     }
     const int row = match >= 0 ? match : nearest >= 0 ? nearest
                                                       : count - 1;
-    ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
-    ListView_SetItemState(list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-    ListView_SetSelectionMark(list, row);
-    ListView_EnsureVisible(list, row, FALSE);
+    SelectOnly(list, row, true);
     return true;
 }
 
@@ -653,42 +654,26 @@ void CopySelection(HWND list)
 void ShowRowMenu(HWND list, ListState* state, LPARAM lparam)
 {
     POINT screen = {};
-    const int row = ContextMenuRow(list, lparam, &screen);
-    if (row >= 0 && !ListView_GetItemState(list, row, LVIS_SELECTED))
+    const int row = ContextMenuRow(list, lparam, &screen, true);
+    // selection notification may close the list
+    if (StateOf(list) != state)
     {
-        ListView_SetItemState(list, -1, 0, LVIS_SELECTED);
-        ListView_SetItemState(list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-        // selection notification may close the list
-        if (StateOf(list) != state)
-        {
-            return;
-        }
+        return;
     }
     if (state->hooks && state->hooks->row_menu && state->hooks->row_menu(state->hooks->context, list, row, screen))
     {
         return;
     }
-    const bool selected = ListView_GetSelectedCount(list) > 0;
-    const bool can_select_all = ListView_GetItemCount(list) > 0 && !(GetWindowLongPtrW(list, GWL_STYLE) & LVS_SINGLESEL);
     HMENU menu = CreatePopupMenu();
     if (!menu)
     {
         return;
     }
-    AppendMenuItem(menu, MF_STRING | (selected ? 0 : MF_GRAYED), kMenuCopy, LabelOf(state, ListLabel::copy), L"Ctrl+C");
-    AppendMenuItem(menu, MF_STRING | (can_select_all ? 0 : MF_GRAYED), kMenuSelectAll, LabelOf(state, ListLabel::select_all), L"Ctrl+A");
+    AppendListRowCommands(menu, list);
     const int chosen = TrackContextMenu(menu, screen, list);
-    if (StateOf(list) != state)
+    if (StateOf(list) == state)
     {
-        return;
-    }
-    if (chosen == kMenuCopy)
-    {
-        CopySelection(list);
-    }
-    else if (chosen == kMenuSelectAll)
-    {
-        SelectAllListItems(list);
+        RunListRowCommand(list, static_cast<UINT>(chosen));
     }
 }
 
@@ -702,7 +687,8 @@ void LoadGridIcon(HWND list, ListState* state)
         return;
     }
     ImageList_SetBkColor(images, CLR_NONE);
-    HICON icon = state->hooks && state->hooks->grid_icon ? state->hooks->grid_icon(dpi) : nullptr;
+    const int id = g_grid_icons[ThemeLightGlyphs() ? 1 : 0];
+    HICON icon = id ? LoadIconResource(id, dpi) : nullptr;
     ImageListAddOrBlank(images, icon, size);
     if (icon)
     {
@@ -760,7 +746,6 @@ void ApplyGridLines(bool shown)
     }
 }
 
-// icon alone on the list background
 LRESULT PaintGridButton(HWND list, const ListState* state, NMTBCUSTOMDRAW* draw)
 {
     const ListColors colors = ColorsOf();
@@ -790,11 +775,10 @@ void ReadGridEdges(HWND list, ListState* state)
     state->grid_edges.clear();
     HWND header = ListView_GetHeader(list);
     RECT header_rect = {};
-    if (!header || !GetWindowRect(header, &header_rect))
+    if (!ChildRect(list, header, &header_rect))
     {
         return;
     }
-    MapWindowPoints(nullptr, list, reinterpret_cast<POINT*>(&header_rect), 2);
     const int count = Header_GetItemCount(header);
     for (int index = 0; index < count; ++index)
     {
@@ -833,16 +817,14 @@ void PaintGrid(HWND list, const ListState* state, HDC hdc, const RECT& area, int
     }
 }
 
-// the client area below the header
 bool BelowHeader(HWND list, RECT* area)
 {
     HWND header = ListView_GetHeader(list);
     RECT header_rect = {};
-    if (!header || !GetClientRect(list, area) || !GetWindowRect(header, &header_rect))
+    if (!header || !GetClientRect(list, area) || !ChildRect(list, header, &header_rect))
     {
         return false;
     }
-    MapWindowPoints(nullptr, list, reinterpret_cast<POINT*>(&header_rect), 2);
     area->top = std::max<LONG>(area->top, header_rect.bottom);
     return true;
 }
@@ -909,7 +891,7 @@ void AddCellTip(HWND list, ListState* state)
     ApplyFrame(state->hooks, state->tip);
 }
 
-// the messages TTF_SUBCLASS relays, all client mouse messages, WM_NCMOUSEMOVE and WM_MOUSELEAVE
+// messages TTF_SUBCLASS relays, all client mouse messages, WM_NCMOUSEMOVE and WM_MOUSELEAVE
 void RelayToTip(HWND list, HWND tip, UINT message, WPARAM wparam, LPARAM lparam)
 {
     if ((message < WM_MOUSEFIRST || message > WM_MOUSELAST) && message != WM_NCMOUSEMOVE && message != WM_MOUSELEAVE)
@@ -921,7 +903,6 @@ void RelayToTip(HWND list, HWND tip, UINT message, WPARAM wparam, LPARAM lparam)
     SendMessageW(tip, TTM_RELAYEVENT, static_cast<WPARAM>(GetMessageExtraInfo()), reinterpret_cast<LPARAM>(&relayed));
 }
 
-// full hovered cell text when truncated, otherwise empty
 std::wstring CellTipText(HWND list, const ListState* state)
 {
     const int row = state->tip_row;
@@ -944,7 +925,6 @@ std::wstring CellTipText(HWND list, const ListState* state)
     {
         return {};
     }
-    // cap tooltip size for huge values
     size_t limit = std::min(text.size(), kTipTextLimit);
     for (size_t index = 0, lines = 0; index < limit; ++index)
     {
@@ -960,36 +940,9 @@ std::wstring CellTipText(HWND list, const ListState* state)
     if (limit < text.size())
     {
         text.resize(limit);
-        text += LabelOf(state, ListLabel::more_text);
+        text += L"...";
     }
     return text;
-}
-
-// beside the cursor, flipped to its other side at the edge of the work area
-void PlaceCellTip(HWND list, const ListState* state)
-{
-    RECT tip = {};
-    POINT cursor = {};
-    MONITORINFO monitor = {};
-    monitor.cbSize = sizeof(monitor);
-    if (!GetWindowRect(state->tip, &tip) || !GetCursorPos(&cursor) || !GetMonitorInfoW(MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST), &monitor))
-    {
-        return;
-    }
-    const int gap = Scale(kTipCursorGap, WindowDpi(list));
-    const int width = tip.right - tip.left;
-    const int height = tip.bottom - tip.top;
-    int x = cursor.x + gap;
-    int y = cursor.y + gap;
-    if (x + width > monitor.rcWork.right)
-    {
-        x = std::max<int>(monitor.rcWork.left, cursor.x - gap - width);
-    }
-    if (y + height > monitor.rcWork.bottom)
-    {
-        y = std::max<int>(monitor.rcWork.top, cursor.y - gap - height);
-    }
-    SetWindowPos(state->tip, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 LRESULT CALLBACK HeaderProc(HWND header, UINT message, WPARAM wparam, LPARAM lparam)
@@ -1080,13 +1033,12 @@ LRESULT CALLBACK ParentProc(HWND parent, UINT message, WPARAM wparam, LPARAM lpa
     return DefSubclassProc(parent, message, wparam, lparam);
 }
 
-// a list reparented with hidden columns gets it at its next paint
+// list reparented with hidden columns gets it at its next paint
 void HookParent(HWND list, const ListState* state)
 {
-    HWND parent = GetParent(list);
-    if (state->model.AnyHidden() && parent && !GetWindowSubclass(parent, ParentProc, kParentSubclassId, nullptr))
+    if (state->model.AnyHidden())
     {
-        SetWindowSubclass(parent, ParentProc, kParentSubclassId, 0);
+        EnsureSubclass(GetParent(list), ParentProc, kParentSubclassId);
     }
 }
 
@@ -1099,7 +1051,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     }
     if (LRESULT translated = 0; state->model.Translate(list, message, wparam, lparam, &translated))
     {
-        // a translated message can notify the parent, which can destroy the list
+        // translated message can notify the parent, which can destroy the list
         if (Alive(list, state))
         {
             HookParent(list, state);
@@ -1124,7 +1076,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     }
     if (message == WM_PAINT)
     {
-        // the region stays invalid, the batch invalidates what it moved and the next paint covers both
+        // region stays invalid, the batch invalidates what it moved and the next paint covers both
         if (state->paint_batches > 0)
         {
             state->paint_skipped = true;
@@ -1144,9 +1096,9 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             // check button already toggled before notifying the list
             const bool shown = SendMessageW(state->grid_button, TB_ISBUTTONCHECKED, kGridCommand, 0) != 0;
             ApplyGridLines(shown);
-            if (state->hooks && state->hooks->grid_changed)
+            if (g_grid_changed)
             {
-                state->hooks->grid_changed(shown);
+                g_grid_changed(g_grid_changed_context, shown);
             }
             return 0;
         }
@@ -1171,7 +1123,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             }
             if (state->tip && header->hwndFrom == state->tip && header->code == TTN_SHOW)
             {
-                PlaceCellTip(list, state);
+                PlaceTipNearCursor(state->tip, WindowDpi(list));
                 return TRUE;
             }
             if (header->hwndFrom != ListView_GetHeader(list))
@@ -1225,7 +1177,6 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             const int column = row >= 0 ? state->model.Subitem(hit.iSubItem) : -1;
             if (row != state->tip_row || column != state->tip_column)
             {
-                // restart tooltip delay for each cell
                 state->tip_row = row;
                 state->tip_column = column;
                 SendMessageW(state->tip, TTM_POP, 0, 0);
@@ -1262,7 +1213,8 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     case WM_UPDATEUISTATE:
         {
             const LRESULT result = DefSubclassProc(list, message, wparam, lparam);
-            // the lists own UIS_SET comes back here, while Windows keeps keyboard cues shown asking again would never end
+            // UIS_SET of the list itself comes back here, while Windows keeps keyboard cues shown asking again would
+            // never end
             if (LOWORD(wparam) != UIS_SET)
             {
                 HideFocusRectangle(list);
@@ -1395,7 +1347,7 @@ bool Attach(HWND list, const ListViewHooks* hooks, DWORD extra_styles, bool dial
     return true;
 }
 
-} // namespace
+}
 
 int ColumnSubItem(HWND list, int position)
 {
@@ -1455,7 +1407,7 @@ void ShowListGridButton(HWND list)
         return;
     }
     // TB_ADDSTRING takes a list of strings that ends with an empty one
-    std::wstring label = LabelOf(state, ListLabel::grid_lines);
+    std::wstring label = Text(L"Grid Lines");
     HWND button = CreateWindowExW(0, TOOLBARCLASSNAMEW, label.c_str(), WS_CHILD | WS_CLIPSIBLINGS | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | CCS_NODIVIDER | CCS_NOPARENTALIGN | CCS_NORESIZE, 0, 0, 0, 0, GetParent(list), nullptr, nullptr, nullptr);
     if (!button)
     {
@@ -1479,6 +1431,18 @@ void ShowListGridButton(HWND list)
     LoadGridIcon(list, state);
     ApplyFrame(state->hooks, button);
     LayoutGridButton(list, state);
+}
+
+void SetListGridIcons(int dark_icon, int light_icon)
+{
+    g_grid_icons[0] = dark_icon;
+    g_grid_icons[1] = light_icon;
+}
+
+void SetListGridChanged(void (*changed)(void* context, bool shown), void* context)
+{
+    g_grid_changed = changed;
+    g_grid_changed_context = context;
 }
 
 void SetAllListGridLines(bool shown)
@@ -1585,7 +1549,7 @@ void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
         item.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_FMT | LVCF_SUBITEM;
         item.pszText = const_cast<wchar_t*>(column.title.c_str());
         item.fmt = column.format;
-        // the first column holds the item text and state and is always shown
+        // first column holds the item text and state and is always shown
         const bool shown = index == 0 || (column.visible && column.available);
         item.cx = shown ? Scale(column.width_dip > 0 || index != 0 ? column.width_dip : column.default_width_dip, dpi) : 0;
         item.iSubItem = static_cast<int>(index);
@@ -1686,13 +1650,12 @@ void ResetListColumns(HWND list)
 
 int FitListColumn(HWND list, int column)
 {
-    // unavailable columns stay hidden
     if (const ListState* state = StateOf(list); state && column >= 0 && static_cast<size_t>(column) < state->columns.size() && !state->columns[static_cast<size_t>(column)].available)
     {
         return ListView_GetColumnWidth(list, column);
     }
     const std::wstring title = ColumnTitle(list, column);
-    // the native fit and the final width would each paint the columns right of this one
+    // native fit and the final width would each paint the columns right of this one
     PaintBatch batch(list, column);
     ListView_SetColumnWidth(list, column, LVSCW_AUTOSIZE);
     int width = ListView_GetColumnWidth(list, column);
@@ -1704,6 +1667,19 @@ int FitListColumn(HWND list, int column)
     width = std::max(width, ListView_GetStringWidth(list, title.c_str()) + Scale(16, WindowDpi(list)));
     ListView_SetColumnWidth(list, column, width);
     return width;
+}
+
+std::wstring ListCellText(HWND list, int row, int subitem)
+{
+    const ListState* state = StateOf(list);
+    if (state)
+    {
+        HookParent(list, state);
+    }
+    std::vector<wchar_t> buffer;
+    std::wstring text;
+    ReadCell(list, state, row, subitem, &buffer, &text);
+    return text;
 }
 
 std::wstring SelectedRowsText(HWND list)
@@ -1752,6 +1728,146 @@ std::wstring SelectedRowsText(HWND list)
     return text;
 }
 
+std::vector<int> SelectedListItems(HWND list)
+{
+    std::vector<int> rows;
+    const ListState* state = StateOf(list);
+    const auto send = [&](UINT message, WPARAM wparam, LPARAM lparam) {
+        return static_cast<int>(state ? state->model.Direct(list, message, wparam, lparam) : SendMessageW(list, message, wparam, lparam));
+    };
+    const int count = list ? send(LVM_GETITEMCOUNT, 0, 0) : 0;
+    if (count <= 0)
+    {
+        return rows;
+    }
+    rows.reserve(static_cast<size_t>(std::clamp(send(LVM_GETSELECTEDCOUNT, 0, 0), 0, count)));
+    // row at or before the last one ends a list that changed while it was read
+    for (int row = -1; static_cast<int>(rows.size()) < count;)
+    {
+        const int next = send(LVM_GETNEXTITEM, static_cast<WPARAM>(row), MAKELPARAM(LVNI_SELECTED, 0));
+        if (next <= row)
+        {
+            break;
+        }
+        rows.push_back(next);
+        row = next;
+    }
+    return rows;
+}
+
+void SetListRows(HWND list, const TextRows& rows)
+{
+    if (!list)
+    {
+        return;
+    }
+    ListView_DeleteAllItems(list);
+    ListView_SetItemCount(list, static_cast<int>(rows.size()));
+    for (size_t row = 0; row < rows.size(); ++row)
+    {
+        LVITEMW item = {};
+        item.mask = LVIF_TEXT | LVIF_PARAM;
+        item.iItem = static_cast<int>(row);
+        item.lParam = static_cast<LPARAM>(row);
+        item.pszText = const_cast<wchar_t*>(rows[row].empty() ? L"" : rows[row][0].c_str());
+        const int index = ListView_InsertItem(list, &item);
+        for (size_t column = 1; index >= 0 && column < rows[row].size(); ++column)
+        {
+            ListView_SetItemText(list, index, static_cast<int>(column), const_cast<wchar_t*>(rows[row][column].c_str()));
+        }
+    }
+}
+
+void DrawCellTextMatch(HDC dc, const RECT& rect, std::wstring_view text, int start, int length, COLORREF color)
+{
+    constexpr int kMaxChars = 512;
+    const int total = static_cast<int>(std::min<size_t>(text.size(), kMaxChars));
+    if (start < 0 || length <= 0 || start >= total)
+    {
+        return;
+    }
+    length = std::min(length, total - start);
+    const int available = rect.right - rect.left;
+    SIZE full = {};
+    if (available <= 0 || !GetTextExtentPoint32W(dc, text.data(), total, &full))
+    {
+        return;
+    }
+    // cut text ends in "...", the match counts as far as the characters before it
+    int visible = total;
+    if (full.cx > available)
+    {
+        SIZE ellipsis = {};
+        SIZE fitted = {};
+        if (!GetTextExtentPoint32W(dc, L"...", 3, &ellipsis) || ellipsis.cx >= available || !GetTextExtentExPointW(dc, text.data(), total, available - ellipsis.cx, &visible, nullptr, &fitted))
+        {
+            return;
+        }
+    }
+    if (start >= visible)
+    {
+        return;
+    }
+    length = std::min(length, visible - start);
+    SIZE prefix = {};
+    TEXTMETRICW metrics = {};
+    if (!GetTextExtentPoint32W(dc, text.data(), start, &prefix) || !GetTextMetricsW(dc, &metrics))
+    {
+        return;
+    }
+    const int y = rect.top + (rect.bottom - rect.top - metrics.tmHeight) / 2;
+    const int old_mode = SetBkMode(dc, TRANSPARENT);
+    const COLORREF old_color = SetTextColor(dc, color);
+    ExtTextOutW(dc, rect.left + prefix.cx, y, ETO_CLIPPED, &rect, text.data() + start, static_cast<UINT>(length), nullptr);
+    SetTextColor(dc, old_color);
+    SetBkMode(dc, old_mode);
+}
+
+ListSelection CaptureListSelection(HWND list)
+{
+    ListSelection selection;
+    const int count = list ? ListView_GetItemCount(list) : 0;
+    if (count <= 0)
+    {
+        return selection;
+    }
+    selection.all = static_cast<int>(ListView_GetSelectedCount(list)) == count;
+    if (!selection.all)
+    {
+        selection.rows = SelectedListItems(list);
+    }
+    selection.focused = ListView_GetNextItem(list, -1, LVNI_FOCUSED);
+    selection.mark = ListView_GetSelectionMark(list);
+    return selection;
+}
+
+void ApplyListSelection(HWND list, const ListSelection& selection)
+{
+    if (!list)
+    {
+        return;
+    }
+    const int count = ListView_GetItemCount(list);
+    const auto in_range = [count](int row) { return row >= 0 && row < count; };
+    const bool all = count > 0 && (selection.all || std::count_if(selection.rows.begin(), selection.rows.end(), in_range) == count);
+    // no WM_SETREDRAW, it saves nothing here (50000 rows 103 ms either way), and a list view keeps WS_VISIBLE while
+    // redraw is off, so a scope would turn WM_SETREDRAW FALSE of a caller back on
+    ListView_SetItemState(list, -1, all ? LVIS_SELECTED : 0, LVIS_SELECTED | LVIS_FOCUSED);
+    for (size_t index = 0; !all && index < selection.rows.size(); ++index)
+    {
+        if (in_range(selection.rows[index]))
+        {
+            ListView_SetItemState(list, selection.rows[index], LVIS_SELECTED, LVIS_SELECTED);
+        }
+    }
+    if (in_range(selection.focused))
+    {
+        ListView_SetItemState(list, selection.focused, LVIS_FOCUSED, LVIS_FOCUSED);
+    }
+    // without an anchor the list extends from the focused row of the moment
+    ListView_SetSelectionMark(list, in_range(selection.mark) ? selection.mark : -1);
+}
+
 void SelectAllListItems(HWND list)
 {
     if (list && !(GetWindowLongPtrW(list, GWL_STYLE) & LVS_SINGLESEL))
@@ -1760,7 +1876,59 @@ void SelectAllListItems(HWND list)
     }
 }
 
-int ContextMenuRow(HWND list, LPARAM screen_point, POINT* screen)
+void InvertListSelection(HWND list)
+{
+    const int count = list ? ListView_GetItemCount(list) : 0;
+    if (count <= 0 || (GetWindowLongPtrW(list, GWL_STYLE) & LVS_SINGLESEL))
+    {
+        return;
+    }
+    const std::vector<int> selected = SelectedListItems(list);
+    const int kept = static_cast<int>(selected.size());
+    int first = 0;
+    while (first < kept && selected[static_cast<size_t>(first)] == first)
+    {
+        ++first;
+    }
+    // one message for the larger side, one per row for the smaller (no WM_SETREDRAW, see ApplyListSelection)
+    if (kept <= count - kept)
+    {
+        ListView_SetItemState(list, -1, LVIS_SELECTED, LVIS_SELECTED);
+        for (const int row : selected)
+        {
+            ListView_SetItemState(list, row, 0, LVIS_SELECTED);
+        }
+    }
+    else
+    {
+        ListView_SetItemState(list, -1, 0, LVIS_SELECTED);
+        for (int row = 0, next = 0; row < count; ++row)
+        {
+            if (next < kept && selected[static_cast<size_t>(next)] == row)
+            {
+                ++next;
+                continue;
+            }
+            ListView_SetItemState(list, row, LVIS_SELECTED, LVIS_SELECTED);
+        }
+    }
+    const int focus = first < count ? first : 0;
+    ListView_SetItemState(list, focus, LVIS_FOCUSED, LVIS_FOCUSED);
+    ListView_SetSelectionMark(list, focus);
+    ListView_EnsureVisible(list, focus, FALSE);
+}
+
+bool SelectOnlyListRow(HWND list, int row, bool ensure_visible)
+{
+    if (!list || row < 0 || row >= ListView_GetItemCount(list))
+    {
+        return false;
+    }
+    SelectOnly(list, row, ensure_visible);
+    return true;
+}
+
+int ContextMenuRow(HWND list, LPARAM screen_point, POINT* screen, bool select_clicked)
 {
     *screen = {GET_X_LPARAM(screen_point), GET_Y_LPARAM(screen_point)};
     if (screen->x != -1 || screen->y != -1)
@@ -1768,7 +1936,13 @@ int ContextMenuRow(HWND list, LPARAM screen_point, POINT* screen)
         LVHITTESTINFO hit = {};
         hit.pt = *screen;
         ScreenToClient(list, &hit.pt);
-        return ListView_HitTest(list, &hit);
+        const int row = ListView_HitTest(list, &hit);
+        // mouse click selected the row already, a WM_CONTEXTMENU sent with a point did not
+        if (select_clicked && row >= 0 && !ListView_GetItemState(list, row, LVIS_SELECTED))
+        {
+            SelectOnlyListRow(list, row, false);
+        }
+        return row;
     }
     int row = ListView_GetNextItem(list, -1, LVNI_FOCUSED | LVNI_SELECTED);
     row = row >= 0 ? row : ListView_GetNextItem(list, -1, LVNI_SELECTED);
@@ -1781,6 +1955,29 @@ int ContextMenuRow(HWND list, LPARAM screen_point, POINT* screen)
     *screen = {rect.left, rect.bottom};
     ClientToScreen(list, screen);
     return row;
+}
+
+void AppendListRowCommands(HMENU menu, HWND list)
+{
+    const bool selected = ListView_GetSelectedCount(list) > 0;
+    const bool can_select_all = ListView_GetItemCount(list) > 0 && !(GetWindowLongPtrW(list, GWL_STYLE) & LVS_SINGLESEL);
+    AppendMenuItem(menu, MF_STRING | (selected ? 0 : MF_GRAYED), kMenuCopy, Text(L"&Copy"), L"Ctrl+C");
+    AppendMenuItem(menu, MF_STRING | (can_select_all ? 0 : MF_GRAYED), kMenuSelectAll, Text(L"Select &All"), L"Ctrl+A");
+}
+
+bool RunListRowCommand(HWND list, UINT command)
+{
+    if (command == kMenuCopy)
+    {
+        CopySelection(list);
+        return true;
+    }
+    if (command == kMenuSelectAll)
+    {
+        SelectAllListItems(list);
+        return true;
+    }
+    return false;
 }
 
 bool ListViewItemData(HWND list, int row, LPARAM* data)
@@ -1809,4 +2006,4 @@ int FindListViewItemByData(HWND list, LPARAM data)
     return list ? ListView_FindItem(list, -1, &find) : -1;
 }
 
-} // namespace win32ui
+}

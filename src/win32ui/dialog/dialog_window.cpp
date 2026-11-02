@@ -10,6 +10,7 @@
 #include "win32ui/status_bar/status_bar.h"
 #include "win32ui/system_api.h"
 #include "win32ui/theme/palette.h"
+#include "win32ui/window.h"
 
 #include <commctrl.h>
 
@@ -39,8 +40,15 @@ ATOM g_class_atom = 0;
 HINSTANCE g_class_instance = nullptr;
 const DialogTheme* g_theme = nullptr;
 bool g_caption_icon = false;
-int g_modal_depth = 0;
 DialogWindow* g_creating = nullptr;
+
+struct ModalCancel
+{
+    void (*cancel)(void* context);
+    void* context;
+};
+// open ModalScopes, innermost last
+std::vector<ModalCancel> g_modal_scopes;
 
 std::vector<HWND>& OpenDialogs()
 {
@@ -78,7 +86,6 @@ void ApplyTheme(HWND dialog)
     }
 }
 
-// centers on the owner or work area, within the monitor work area
 // fixed windows that dont fit keep their size and caption on screen
 RECT CenteredRect(HWND owner, int width, int height, bool resizable)
 {
@@ -106,8 +113,7 @@ RECT CenteredRect(HWND owner, int width, int height, bool resizable)
     return rect;
 }
 
-// return presses the default button in multiline edits without ES_WANTRETURN
-// CTRL+return inserts a line break
+// return presses the default button in multiline edits without ES_WANTRETURN, Ctrl+Return inserts a line break
 bool PressDefaultOnReturn(HWND dialog, const MSG& message)
 {
     if (message.message != WM_KEYDOWN || message.wParam != VK_RETURN || GetKeyState(VK_CONTROL) < 0 || !IsChild(dialog, message.hwnd))
@@ -129,7 +135,6 @@ bool PressDefaultOnReturn(HWND dialog, const MSG& message)
     return true;
 }
 
-// loads DIALOGEX resource name from the module that registered the class, with the UI font and that class
 std::vector<BYTE> LoadDialogTemplate(const wchar_t* name)
 {
     const HINSTANCE instance = g_class_instance;
@@ -266,7 +271,7 @@ class ProcDialog final : public DialogWindow
     HWND focus_ = nullptr;
 };
 
-} // namespace
+}
 
 bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const DialogTheme* theme, int icon)
 {
@@ -305,18 +310,23 @@ bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const Di
 }
 
 ModalScope::ModalScope()
+    : ModalScope(nullptr, nullptr)
 {
-    ++g_modal_depth;
+}
+
+ModalScope::ModalScope(void (*cancel)(void* context), void* context)
+{
+    g_modal_scopes.push_back({cancel, context});
 }
 
 ModalScope::~ModalScope()
 {
-    --g_modal_depth;
+    g_modal_scopes.pop_back();
 }
 
 int ModalDepth()
 {
-    return g_modal_depth;
+    return static_cast<int>(g_modal_scopes.size());
 }
 
 void CancelOpenDialogs()
@@ -324,6 +334,15 @@ void CancelOpenDialogs()
     for (HWND dialog : OpenDialogs())
     {
         PostMessageW(dialog, WM_CLOSE, 0, 0);
+    }
+    // innermost first, a cancel may end inner scopes at once, those are skipped
+    for (size_t index = g_modal_scopes.size(); index-- > 0;)
+    {
+        if (index < g_modal_scopes.size() && g_modal_scopes[index].cancel)
+        {
+            const ModalCancel scope = g_modal_scopes[index];
+            scope.cancel(scope.context);
+        }
     }
 }
 
@@ -450,8 +469,8 @@ bool DialogWindow::CreateTemplateWindow(HWND root_owner, const wchar_t* template
     done_ = false;
     result_ = IDCANCEL;
     fonts_.Create(WindowDpi(root_owner));
-    // first window message binds the object, WM_INITDIALOG runs layout
-    // dialog manager only sends it when a dialog procedure exists, so give an empty one
+    // first window message binds the object, WM_INITDIALOG runs layout, the dialog manager only sends it when a dialog
+    // procedure exists, so give an empty one
     g_creating = this;
     CreateDialogIndirectParamW(g_class_instance, reinterpret_cast<const DLGTEMPLATE*>(dialog.data()), root_owner, [](HWND, UINT, WPARAM, LPARAM) -> INT_PTR { return FALSE; }, 0);
     g_creating = nullptr;
@@ -520,14 +539,13 @@ void DialogWindow::ScaleControls(UINT from_dpi, UINT to_dpi)
     for (HWND child = GetWindow(hwnd_, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
     {
         RECT rect = {};
-        GetWindowRect(child, &rect);
+        ChildRect(hwnd_, child, &rect);
         // drop down window height includes the list
         RECT dropped = {};
         if (ClassIs(child, WC_COMBOBOXW) && SendMessageW(child, CB_GETDROPPEDCONTROLRECT, 0, reinterpret_cast<LPARAM>(&dropped)))
         {
             rect.bottom = rect.top + (dropped.bottom - dropped.top);
         }
-        MapWindowPoints(nullptr, hwnd_, reinterpret_cast<POINT*>(&rect), 2);
         SetWindowPos(child, nullptr, scale(rect.left), scale(rect.top), scale(rect.right - rect.left), scale(rect.bottom - rect.top), SWP_NOZORDER | SWP_NOACTIVATE);
     }
     if (!created_)
@@ -823,14 +841,8 @@ LRESULT DialogWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam)
         }
         return 0;
     case WM_GETMINMAXINFO:
-        {
-            auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
-            RECT rect = {0, 0, Px(min_width_dip_), Px(min_height_dip_)};
-            AdjustWindowRectForDpi(&rect, static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_STYLE)), static_cast<DWORD>(GetWindowLongPtrW(hwnd_, GWL_EXSTYLE)), dpi());
-            info->ptMinTrackSize.x = rect.right - rect.left;
-            info->ptMinTrackSize.y = rect.bottom - rect.top;
-            return 0;
-        }
+        RaiseMinTrackSize(hwnd_, reinterpret_cast<MINMAXINFO*>(lparam), {min_width_dip_, min_height_dip_}, dpi(), true);
+        return 0;
     case kDpiChangedMessage:
         {
             const UINT previous = fonts_.dpi();
@@ -847,8 +859,7 @@ LRESULT DialogWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam)
                 // next destroys previous fonts after controls switch
                 ApplyFonts(next.ui());
             }
-            const RECT* suggested = reinterpret_cast<const RECT*>(lparam);
-            SetWindowPos(hwnd_, nullptr, suggested->left, suggested->top, suggested->right - suggested->left, suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
+            ApplySuggestedRect(hwnd_, reinterpret_cast<const RECT*>(lparam));
             Relayout();
             return 0;
         }
@@ -858,4 +869,4 @@ LRESULT DialogWindow::Handle(UINT message, WPARAM wparam, LPARAM lparam)
     return DefaultProc(message, wparam, lparam);
 }
 
-} // namespace win32ui
+}

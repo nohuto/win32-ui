@@ -8,6 +8,8 @@
 #include "win32ui/dialog/message_dialog.h"
 #include "win32ui/list_view/sort.h"
 #include "win32ui/menu/popup_menu.h"
+#include "win32ui/system/strings.h"
+#include "win32ui/text/text.h"
 #include "win32ui/theme/preset_editor_internal.h"
 #include "win32ui/theme/theme.h"
 #include "win32ui/theme/theme_presets_internal.h"
@@ -17,7 +19,6 @@
 #include <windowsx.h>
 
 #include <algorithm>
-#include <cwctype>
 #include <functional>
 #include <iterator>
 
@@ -32,38 +33,32 @@ constexpr int kGroupColorsId = 2115;
 constexpr int kGroupTemplatesId = 2116;
 constexpr int kCopyCommand = 0x7F00;
 constexpr int kSelectAllCommand = 0x7F01;
+constexpr const wchar_t* kCopySuffix = L" Copy";
 
 bool IsBuiltInThemePreset(std::wstring_view name)
 {
     const std::vector<ThemePreset>& builtins = BuiltInThemePresets();
-    return std::any_of(builtins.begin(), builtins.end(), [&](const ThemePreset& preset) { return EqualName(preset.name, name); });
+    return std::any_of(builtins.begin(), builtins.end(), [&](const ThemePreset& preset) { return EqualsInsensitive(preset.name, name); });
 }
 
-// a name is one line of the preset file and the reader trims it
+// name is one line of the preset file and the reader trims it
 std::wstring Trimmed(std::wstring text)
 {
     std::erase_if(text, [](wchar_t character) { return character < 0x20 || character == 0x7F; });
-    const auto space = [](wchar_t character) { return iswspace(character) != 0; };
-    text.erase(text.begin(), std::find_if_not(text.begin(), text.end(), space));
-    text.erase(std::find_if_not(text.rbegin(), text.rend(), space).base(), text.end());
-    return text;
+    return std::wstring(TrimView(text));
 }
 
 class PresetEditor final : public DialogWindow
 {
   public:
     PresetEditor(const std::vector<ThemePreset>& presets, const std::wstring& active_name, const PresetEditorHooks* hooks)
-        : presets_(presets), active_name_(active_name), hooks_(hooks), templates_(BuiltInThemePresets())
+        : presets_(presets), active_name_(active_name), hooks_(hooks), templates_(BuiltInThemePresets()),
+          // row menu uses editor commands with app context
+          list_hooks_(DialogListHooks([](void*, HWND list, int, POINT screen) {
+              auto* editor = static_cast<PresetEditor*>(DialogWindow::FromWindow(GetParent(list)));
+              return editor && editor->ShowMenu(list, screen);
+          }))
     {
-        if (hooks->list_hooks)
-        {
-            list_hooks_ = *hooks->list_hooks;
-        }
-        // row menu uses editor commands with app context
-        list_hooks_.row_menu = [](void*, HWND list, int, POINT screen) {
-            auto* editor = static_cast<PresetEditor*>(DialogWindow::FromWindow(GetParent(list)));
-            return editor && editor->ShowMenu(list, screen);
-        };
     }
 
   protected:
@@ -74,27 +69,27 @@ class PresetEditor final : public DialogWindow
 
     void OnCreate() override
     {
-        SetWindowTextW(hwnd(), Text(PresetEditorText::title));
-        const std::pair<int, PresetEditorText> texts[] = {
-            {kGroupPresetsId, PresetEditorText::presets},
-            {kGroupColorsId, PresetEditorText::colors},
-            {kGroupTemplatesId, PresetEditorText::templates},
-            {kPresetNewId, PresetEditorText::new_preset},
-            {kPresetDuplicateId, PresetEditorText::duplicate},
-            {kPresetRenameId, PresetEditorText::rename},
-            {kPresetDeleteId, PresetEditorText::delete_preset},
-            {kPresetImportId, PresetEditorText::import_presets},
-            {kPresetExportId, PresetEditorText::export_presets},
-            {kPresetEditColorId, PresetEditorText::edit_color},
-            {kPresetDarkId, PresetEditorText::dark},
-            {kPresetApplyTemplateId, PresetEditorText::apply_template},
-            {kPresetApplyId, PresetEditorText::apply},
-            {IDOK, PresetEditorText::ok},
-            {IDCANCEL, PresetEditorText::cancel},
+        SetWindowTextW(hwnd(), Text(L"Theme Presets"));
+        const std::pair<int, const wchar_t*> texts[] = {
+            {kGroupPresetsId, Text(L"Presets")},
+            {kGroupColorsId, Text(L"Colors")},
+            {kGroupTemplatesId, Text(L"Templates")},
+            {kPresetNewId, Text(L"New...")},
+            {kPresetDuplicateId, Text(L"Duplicate")},
+            {kPresetRenameId, Text(L"Rename...")},
+            {kPresetDeleteId, Text(L"Delete")},
+            {kPresetImportId, Text(L"Import...")},
+            {kPresetExportId, Text(L"Export...")},
+            {kPresetEditColorId, Text(L"Edit Color...")},
+            {kPresetDarkId, Text(L"Treat as dark theme")},
+            {kPresetApplyTemplateId, Text(L"Apply Template")},
+            {kPresetApplyId, Text(L"Apply")},
+            {IDOK, Text(L"OK")},
+            {IDCANCEL, Text(L"Cancel")},
         };
         for (const auto& [id, text] : texts)
         {
-            SetDlgItemTextW(hwnd(), id, Text(text));
+            SetDlgItemTextW(hwnd(), id, text);
         }
         // template was already fitted with empty text
         FitDialogText(hwnd());
@@ -107,7 +102,7 @@ class PresetEditor final : public DialogWindow
         AttachDialogListView(preset_list_, &list_hooks_);
         SetListColumns(preset_list_, {{L"", 120, 120}});
         AttachDialogListView(color_list_, &list_hooks_);
-        SetListColumns(color_list_, {{Text(PresetEditorText::color_column), 150, 150}, {Text(PresetEditorText::hex_column), 90, 90}});
+        SetListColumns(color_list_, {{Text(L"Color"), 150, 150}, {Text(L"Hex"), 90, 90}});
         ShowListGridButton(color_list_);
         for (const ThemePreset& preset : templates_)
         {
@@ -133,7 +128,7 @@ class PresetEditor final : public DialogWindow
             if (const ThemePreset* preset = Selected())
             {
                 ThemePreset copy = *preset;
-                copy.name = Unique(preset->name + Text(PresetEditorText::copy_suffix));
+                copy.name = Unique(preset->name + kCopySuffix);
                 Add(std::move(copy));
             }
             return true;
@@ -229,12 +224,6 @@ class PresetEditor final : public DialogWindow
     }
 
   private:
-    const wchar_t* Text(PresetEditorText text) const
-    {
-        const wchar_t* value = hooks_->text ? hooks_->text(text) : nullptr;
-        return value ? value : L"";
-    }
-
     ThemePreset* Selected()
     {
         return selected_ >= 0 && static_cast<size_t>(selected_) < presets_.size() ? &presets_[static_cast<size_t>(selected_)] : nullptr;
@@ -244,7 +233,7 @@ class PresetEditor final : public DialogWindow
     {
         for (size_t index = 0; index < presets_.size(); ++index)
         {
-            if (EqualName(presets_[index].name, name))
+            if (EqualsInsensitive(presets_[index].name, name))
             {
                 return static_cast<int>(index);
             }
@@ -252,11 +241,10 @@ class PresetEditor final : public DialogWindow
         return presets_.empty() ? -1 : 0;
     }
 
-    // base or base with the first unused number, ignored may keep its own name
     std::wstring Unique(const std::wstring& base, const ThemePreset* ignored = nullptr) const
     {
         const auto taken = [&](const std::wstring& name) {
-            return std::any_of(presets_.begin(), presets_.end(), [&](const ThemePreset& preset) { return &preset != ignored && EqualName(preset.name, name); });
+            return std::any_of(presets_.begin(), presets_.end(), [&](const ThemePreset& preset) { return &preset != ignored && EqualsInsensitive(preset.name, name); });
         };
         if (!taken(base))
         {
@@ -272,10 +260,10 @@ class PresetEditor final : public DialogWindow
         }
     }
 
-    bool Prompt(PresetEditorText title, const std::wstring& initial, std::wstring* name)
+    bool Prompt(const wchar_t* title, const std::wstring& initial, std::wstring* name)
     {
         std::wstring answer;
-        if (!hooks_->prompt_name || !hooks_->prompt_name(hwnd(), Text(title), initial, &answer))
+        if (!hooks_->prompt_name || !hooks_->prompt_name(hwnd(), title, initial, &answer))
         {
             return false;
         }
@@ -305,7 +293,7 @@ class PresetEditor final : public DialogWindow
             return true;
         }
         std::wstring name;
-        if (!Prompt(PresetEditorText::copy_title, Unique(preset->name + Text(PresetEditorText::copy_suffix)), &name))
+        if (!Prompt(Text(L"New Preset"), Unique(preset->name + kCopySuffix), &name))
         {
             return false;
         }
@@ -319,7 +307,7 @@ class PresetEditor final : public DialogWindow
     void NewPreset()
     {
         std::wstring name;
-        if (!Prompt(PresetEditorText::new_title, L"", &name))
+        if (!Prompt(Text(L"New Preset"), L"", &name))
         {
             return;
         }
@@ -333,7 +321,7 @@ class PresetEditor final : public DialogWindow
     {
         ThemePreset* preset = Selected();
         std::wstring name;
-        if (!preset || IsBuiltInThemePreset(preset->name) || !Prompt(PresetEditorText::rename_title, preset->name, &name))
+        if (!preset || IsBuiltInThemePreset(preset->name) || !Prompt(Text(L"Rename Preset"), preset->name, &name))
         {
             return;
         }
@@ -425,11 +413,7 @@ class PresetEditor final : public DialogWindow
         {
             selected_ = presets_.empty() ? -1 : 0;
         }
-        if (selected_ >= 0)
-        {
-            ListView_SetItemState(preset_list_, selected_, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-            ListView_EnsureVisible(preset_list_, selected_, FALSE);
-        }
+        SelectOnlyListRow(preset_list_, selected_);
         ListView_SetColumnWidth(preset_list_, 0, LVSCW_AUTOSIZE_USEHEADER);
         SyncSelection();
     }
@@ -448,7 +432,7 @@ class PresetEditor final : public DialogWindow
                 LVITEMW item = {};
                 item.mask = LVIF_TEXT | LVIF_PARAM;
                 item.iItem = static_cast<int>(index);
-                item.pszText = const_cast<wchar_t*>(Text(kColorFields[index].text));
+                item.pszText = const_cast<wchar_t*>(Text(kColorFields[index].label));
                 item.lParam = static_cast<LPARAM>(index);
                 const int row = ListView_InsertItem(color_list_, &item);
                 ListView_SetItemText(color_list_, row, 1, const_cast<wchar_t*>(hex.c_str()));
@@ -459,12 +443,7 @@ class PresetEditor final : public DialogWindow
             }
             if (had_field)
             {
-                const int row = FindListViewItemByData(color_list_, field);
-                if (row >= 0)
-                {
-                    ListView_SetItemState(color_list_, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-                    ListView_EnsureVisible(color_list_, row, FALSE);
-                }
+                SelectOnlyListRow(color_list_, FindListViewItemByData(color_list_, field));
             }
         }
         Button_SetCheck(dark_check_, preset && preset->colors.dark ? BST_CHECKED : BST_UNCHECKED);
@@ -490,25 +469,23 @@ class PresetEditor final : public DialogWindow
         {
             const ThemePreset* preset = Selected();
             const UINT own_flags = MF_STRING | (preset && !IsBuiltInThemePreset(preset->name) ? 0 : MF_GRAYED);
-            AppendMenuItem(menu, MF_STRING, kPresetNewId, Text(PresetEditorText::new_preset));
-            AppendMenuItem(menu, row_flags, kPresetDuplicateId, Text(PresetEditorText::duplicate));
-            AppendMenuItem(menu, own_flags, kPresetRenameId, Text(PresetEditorText::rename));
-            AppendMenuItem(menu, own_flags, kPresetDeleteId, Text(PresetEditorText::delete_preset));
+            AppendMenuItem(menu, MF_STRING, kPresetNewId, Text(L"New..."));
+            AppendMenuItem(menu, row_flags, kPresetDuplicateId, Text(L"Duplicate"));
+            AppendMenuItem(menu, own_flags, kPresetRenameId, Text(L"Rename..."));
+            AppendMenuItem(menu, own_flags, kPresetDeleteId, Text(L"Delete"));
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-            AppendMenuItem(menu, MF_STRING, kPresetImportId, Text(PresetEditorText::import_presets));
-            AppendMenuItem(menu, MF_STRING, kPresetExportId, Text(PresetEditorText::export_presets));
+            AppendMenuItem(menu, MF_STRING, kPresetImportId, Text(L"Import..."));
+            AppendMenuItem(menu, MF_STRING, kPresetExportId, Text(L"Export..."));
         }
         else
         {
-            AppendMenuItem(menu, row_flags, kPresetEditColorId, Text(PresetEditorText::edit_color));
+            AppendMenuItem(menu, row_flags, kPresetEditColorId, Text(L"Edit Color..."));
         }
 
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-        const wchar_t* copy = list_hooks_.label ? list_hooks_.label(ListLabel::copy) : nullptr;
-        const wchar_t* select_all = list_hooks_.label ? list_hooks_.label(ListLabel::select_all) : nullptr;
         const bool can_select_all = ListView_GetItemCount(list) > 0 && !(GetWindowLongPtrW(list, GWL_STYLE) & LVS_SINGLESEL);
-        AppendMenuItem(menu, row_flags, kCopyCommand, copy ? copy : L"", L"Ctrl+C");
-        AppendMenuItem(menu, MF_STRING | (can_select_all ? 0 : MF_GRAYED), kSelectAllCommand, select_all ? select_all : L"", L"Ctrl+A");
+        AppendMenuItem(menu, row_flags, kCopyCommand, Text(L"&Copy"), L"Ctrl+C");
+        AppendMenuItem(menu, MF_STRING | (can_select_all ? 0 : MF_GRAYED), kSelectAllCommand, Text(L"Select &All"), L"Ctrl+A");
         SetFocus(list);
         const int chosen = TrackContextMenu(menu, screen, hwnd());
         if (chosen != 0)
@@ -528,7 +505,7 @@ class PresetEditor final : public DialogWindow
         }
         if (column == 0)
         {
-            return CompareStringEx(LOCALE_NAME_USER_DEFAULT, LINGUISTIC_IGNORECASE, editor->Text(kColorFields[static_cast<size_t>(left)].text), -1, editor->Text(kColorFields[static_cast<size_t>(right)].text), -1, nullptr, nullptr, 0) - CSTR_EQUAL;
+            return CompareStringEx(LOCALE_NAME_USER_DEFAULT, LINGUISTIC_IGNORECASE, Text(kColorFields[static_cast<size_t>(left)].label), -1, Text(kColorFields[static_cast<size_t>(right)].label), -1, nullptr, nullptr, 0) - CSTR_EQUAL;
         }
         // COLORREF stores blue in the high byte, display red first
         const auto shown = [preset](LPARAM field) {
@@ -556,7 +533,7 @@ class PresetEditor final : public DialogWindow
     COLORREF custom_colors_[16] = {};
 };
 
-} // namespace
+}
 
 void ShowThemePresetEditor(HWND owner, const std::vector<ThemePreset>& presets, const std::wstring& active_name, const PresetEditorHooks* hooks)
 {
@@ -568,4 +545,4 @@ void ShowThemePresetEditor(HWND owner, const std::vector<ThemePreset>& presets, 
     editor.RunModal(owner, L"WIN32UI_THEME_PRESETS");
 }
 
-} // namespace win32ui
+}

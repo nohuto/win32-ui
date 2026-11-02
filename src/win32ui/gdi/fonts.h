@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <functional>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -24,6 +25,14 @@ LOGFONTW UIFontLogFont(UINT dpi);
 int FontPointSize(const LOGFONTW& font, int zero_height_fallback = 0);
 int FontHeight(int point_size);
 int FontHeight(int point_size, UINT dpi);
+
+UniqueFont CreateMonoFont(HFONT size_from, UINT dpi);
+// controls use the font until it is replaced or reset, a failed creation keeps the old one, on a DPI change the
+// dialog gets WM_SETFONT before its controls, call it again there
+bool SetMonoFont(HWND dialog, std::initializer_list<int> controls, HFONT size_from, UniqueFont* font);
+TEXTMETRICW FontMetrics(HFONT font);
+TEXTMETRICW WindowFontMetrics(HWND window);
+void SetFontTree(HWND root, HFONT font);
 
 class FontSet
 {
@@ -66,4 +75,4 @@ class FontSet
     mutable std::unordered_map<std::wstring, int, TextHash, std::equal_to<>> widths_;
 };
 
-} // namespace win32ui
+}

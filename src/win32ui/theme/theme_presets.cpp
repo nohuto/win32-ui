@@ -1,18 +1,15 @@
 // Copyright (C) 2026 nohuto
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-#define _CRT_RAND_S
-
 #include "win32ui/theme/theme_presets.h"
 
-#include "win32ui/handle_owner.h"
-#include "win32ui/hex_digit_internal.h"
+#include "win32ui/system/error_text.h"
+#include "win32ui/system/file_io.h"
+#include "win32ui/system/strings.h"
+#include "win32ui/text/text.h"
 #include "win32ui/theme/theme_presets_internal.h"
 
 #include <algorithm>
-#include <cstdlib>
-#include <cstring>
-#include <cwchar>
 #include <cwctype>
 #include <limits>
 
@@ -22,7 +19,7 @@ namespace win32ui
 namespace
 {
 
-constexpr LONGLONG kMaxFileBytes = 4 * 1024 * 1024;
+constexpr size_t kMaxFileBytes = 4 * 1024 * 1024;
 constexpr std::wstring_view kPresetSection = L"[preset]";
 
 struct BuiltInPreset
@@ -61,157 +58,57 @@ constexpr BuiltInPreset kBuiltInPresets[] = {
     {L"Tokyo Night", true, {RGB(26, 27, 38), RGB(36, 40, 59), RGB(47, 51, 77), RGB(20, 21, 32), RGB(47, 51, 77), RGB(65, 72, 104), RGB(192, 202, 245), RGB(169, 177, 214), RGB(122, 162, 247), RGB(36, 40, 59), RGB(192, 202, 245), RGB(47, 51, 77), RGB(122, 162, 247)}},
 };
 
-std::wstring_view Trim(std::wstring_view text)
-{
-    while (!text.empty() && iswspace(text.front()))
-    {
-        text.remove_prefix(1);
-    }
-    while (!text.empty() && iswspace(text.back()))
-    {
-        text.remove_suffix(1);
-    }
-    return text;
-}
-
 bool ApplyField(ThemePreset* preset, std::wstring_view key, std::wstring_view value)
 {
-    if (EqualName(key, L"name"))
+    if (EqualsInsensitive(key, L"name"))
     {
         preset->name = value;
         return true;
     }
-    if (EqualName(key, L"dark"))
+    if (EqualsInsensitive(key, L"dark"))
     {
-        preset->colors.dark = value == L"1" || EqualName(value, L"true");
-        return preset->colors.dark || value == L"0" || EqualName(value, L"false");
+        preset->colors.dark = value == L"1" || EqualsInsensitive(value, L"true");
+        return preset->colors.dark || value == L"0" || EqualsInsensitive(value, L"false");
     }
-    const auto field = std::ranges::find_if(kColorFields, [&](const ColorField& entry) { return EqualName(key, entry.key); });
+    const auto field = std::ranges::find_if(kColorFields, [&](const ColorField& entry) { return EqualsInsensitive(key, entry.key); });
     return field == std::end(kColorFields) || ParseThemeColor(value, &(preset->colors.*field->member));
 }
 
 ThemePresetResult ReadText(const std::wstring& path, std::wstring* content)
 {
-    const UniqueFile file(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-    LARGE_INTEGER size = {};
-    if (!file || !GetFileSizeEx(file.get(), &size) || size.QuadPart <= 0)
+    TextEncoding encoding = TextEncoding::utf8;
+    switch (const DWORD code = ReadTextFile(path.c_str(), content, kMaxFileBytes, true, &encoding))
     {
-        return {ThemePresetError::read_failed};
-    }
-    if (size.QuadPart > kMaxFileBytes)
-    {
+    case ERROR_SUCCESS:
+        // empty file cant be read, a byte order mark alone isnt text
+        return content->empty() ? ThemePresetResult{encoding == TextEncoding::utf8 ? ThemePresetError::read_failed : ThemePresetError::bad_encoding} : ThemePresetResult{};
+    case ERROR_FILE_TOO_LARGE:
         return {ThemePresetError::too_large};
-    }
-    std::string bytes(static_cast<size_t>(size.QuadPart), '\0');
-    DWORD read = 0;
-    if (!ReadFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr) || read != bytes.size())
-    {
-        return {ThemePresetError::read_failed};
-    }
-    if (bytes.starts_with("\xFF\xFE"))
-    {
-        if (bytes.size() <= 2 || (bytes.size() - 2) % sizeof(wchar_t) != 0)
-        {
-            return {ThemePresetError::bad_encoding};
-        }
-        content->resize((bytes.size() - 2) / sizeof(wchar_t));
-        std::memcpy(content->data(), bytes.data() + 2, bytes.size() - 2);
-        return {};
-    }
-    const size_t offset = bytes.starts_with("\xEF\xBB\xBF") ? 3 : 0;
-    const char* data = bytes.data() + offset;
-    const int length = static_cast<int>(bytes.size() - offset);
-    UINT code_page = CP_UTF8;
-    DWORD flags = MB_ERR_INVALID_CHARS;
-    int count = MultiByteToWideChar(code_page, flags, data, length, nullptr, 0);
-    if (count <= 0 && offset == 0)
-    {
-        code_page = CP_ACP;
-        flags = 0;
-        count = MultiByteToWideChar(code_page, flags, data, length, nullptr, 0);
-    }
-    if (count <= 0)
-    {
+    case ERROR_INVALID_DATA:
         return {ThemePresetError::bad_encoding};
+    default:
+        return {ThemePresetError::read_failed, 0, code};
     }
-    content->resize(static_cast<size_t>(count));
-    return MultiByteToWideChar(code_page, flags, data, length, content->data(), count) == count
-               ? ThemePresetResult{}
-               : ThemePresetResult{ThemePresetError::bad_encoding};
-}
-
-std::wstring TempSuffix()
-{
-    unsigned high = 0;
-    unsigned low = 0;
-    if (rand_s(&high) != 0 || rand_s(&low) != 0)
-    {
-        high = GetTickCount();
-        low = GetCurrentProcessId();
-    }
-    wchar_t suffix[32] = {};
-    swprintf_s(suffix, L".%08x%08x.tmp", high, low);
-    return suffix;
 }
 
 // dont overwrite existing files with content the reader would reject
-ThemePresetError WriteText(const std::wstring& path, const std::wstring& content)
+ThemePresetResult WriteText(const std::wstring& path, const std::wstring& content)
 {
-    if (content.size() > static_cast<size_t>(kMaxFileBytes))
+    if (content.size() > kMaxFileBytes)
     {
-        return ThemePresetError::too_large;
+        return {ThemePresetError::too_large};
     }
-    const int length = static_cast<int>(content.size());
-    const int count = WideCharToMultiByte(CP_UTF8, 0, content.data(), length, nullptr, 0, nullptr, nullptr);
-    if (count <= 0)
+    const std::string bytes = WideToMultiByte(content, CP_UTF8);
+    if (bytes.empty())
     {
-        return ThemePresetError::write_failed;
+        return {ThemePresetError::write_failed};
     }
-    if (count > kMaxFileBytes)
+    if (bytes.size() > kMaxFileBytes)
     {
-        return ThemePresetError::too_large;
+        return {ThemePresetError::too_large};
     }
-    std::string bytes(static_cast<size_t>(count), '\0');
-    if (WideCharToMultiByte(CP_UTF8, 0, content.data(), length, bytes.data(), count, nullptr, nullptr) != count)
-    {
-        return ThemePresetError::write_failed;
-    }
-    for (int attempt = 0; attempt < 16; ++attempt)
-    {
-        const std::wstring temp_path = path + TempSuffix();
-        UniqueFile file(CreateFileW(temp_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
-        if (!file)
-        {
-            if (GetLastError() == ERROR_FILE_EXISTS)
-            {
-                continue;
-            }
-            return ThemePresetError::write_failed;
-        }
-        DWORD written = 0;
-        const bool ok = WriteFile(file.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
-                        written == bytes.size() && FlushFileBuffers(file.get());
-        file.reset();
-        if (ok)
-        {
-            for (int retry = 0; retry < 20; ++retry)
-            {
-                if (MoveFileExW(temp_path.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
-                {
-                    return ThemePresetError::none;
-                }
-                const DWORD error = GetLastError();
-                if (error != ERROR_ACCESS_DENIED && error != ERROR_SHARING_VIOLATION)
-                {
-                    break;
-                }
-                Sleep(25);
-            }
-        }
-        DeleteFileW(temp_path.c_str());
-        return ThemePresetError::write_failed;
-    }
-    return ThemePresetError::write_failed;
+    const DWORD code = WriteFileAtomic(path.c_str(), bytes);
+    return code == ERROR_SUCCESS ? ThemePresetResult{} : ThemePresetResult{ThemePresetError::write_failed, 0, code};
 }
 
 // persist thirteen colors and dark flag, rebuild error color from the flag
@@ -220,13 +117,6 @@ bool SameSavedColors(const ThemeColors& colors, bool dark, const ThemeColors& sa
     return dark == saved.dark && std::ranges::all_of(kColorFields, [&](const ColorField& field) { return colors.*field.member == saved.*field.member; });
 }
 
-} // namespace
-
-bool EqualName(std::wstring_view left, std::wstring_view right)
-{
-    return left.size() == right.size() && (left.empty() ||
-                                           (left.size() <= static_cast<size_t>(std::numeric_limits<int>::max()) &&
-                                            CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL));
 }
 
 const std::vector<ThemePreset>& BuiltInThemePresets()
@@ -259,9 +149,9 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
     ThemePreset current;
     current.colors.dark = true;
     int section_line = 0;
-    const auto fail = [&](ThemePresetError error, int line) {
+    const auto fail = [&](ThemePresetError error, int line, std::wstring_view text = {}) {
         presets->clear();
-        return ThemePresetResult{error, line};
+        return ThemePresetResult{error, line, 0, std::wstring(text)};
     };
     const auto finish = [&] {
         if (section_line == 0)
@@ -280,12 +170,12 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
     while (!content.empty())
     {
         const size_t end = content.find_first_of(L"\r\n");
-        const std::wstring_view line = Trim(content.substr(0, end));
+        const std::wstring_view line = TrimView(content.substr(0, end));
         if (line == kPresetSection)
         {
             if (!finish())
             {
-                return fail(ThemePresetError::missing_name, section_line);
+                return fail(ThemePresetError::missing_name, section_line, kPresetSection);
             }
             current = {};
             current.colors.dark = true;
@@ -295,9 +185,9 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
         {
             const size_t separator = line.find(L'=');
             if (separator == std::wstring_view::npos ||
-                !ApplyField(&current, Trim(line.substr(0, separator)), Trim(line.substr(separator + 1))))
+                !ApplyField(&current, TrimView(line.substr(0, separator)), TrimView(line.substr(separator + 1))))
             {
-                return fail(ThemePresetError::bad_line, line_number);
+                return fail(ThemePresetError::bad_line, line_number, line);
             }
         }
         if (end == std::wstring_view::npos)
@@ -311,7 +201,7 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
             ++line_number;
         }
     }
-    return finish() ? ThemePresetResult{} : fail(ThemePresetError::missing_name, section_line);
+    return finish() ? ThemePresetResult{} : fail(ThemePresetError::missing_name, section_line, kPresetSection);
 }
 
 std::wstring FormatThemePresets(const std::vector<ThemePreset>& presets)
@@ -319,10 +209,10 @@ std::wstring FormatThemePresets(const std::vector<ThemePreset>& presets)
     std::wstring content;
     for (const ThemePreset& preset : presets)
     {
-        // a name is one line and the reader trims it, one that trims to nothing is skipped like an empty one
+        // name is one line and the reader trims it, one that trims to nothing is skipped like an empty one
         std::wstring line = preset.name;
         std::replace_if(line.begin(), line.end(), [](wchar_t character) { return character < 0x20 || character == 0x7F; }, L' ');
-        const std::wstring_view name = Trim(line);
+        const std::wstring_view name = TrimView(line);
         if (name.empty())
         {
             continue;
@@ -350,7 +240,72 @@ ThemePresetResult ReadThemePresets(const std::wstring& path, std::vector<ThemePr
 
 ThemePresetResult WriteThemePresets(const std::wstring& path, const std::vector<ThemePreset>& presets)
 {
-    return {WriteText(path, FormatThemePresets(presets))};
+    return WriteText(path, FormatThemePresets(presets));
+}
+
+std::wstring ThemePresetErrorText(const ThemePresetResult& result)
+{
+    std::wstring text;
+    switch (result.error)
+    {
+    case ThemePresetError::none:
+        return text;
+    case ThemePresetError::read_failed:
+        text = result.code != ERROR_SUCCESS ? FormatWin32Error(result.code) : Text(L"The file could not be read.");
+        break;
+    case ThemePresetError::too_large:
+        text = Text(L"The file is too large.");
+        break;
+    case ThemePresetError::bad_encoding:
+        text = Text(L"The file isn't valid text.");
+        break;
+    case ThemePresetError::missing_name:
+        text = Text(L"A preset has no name.");
+        break;
+    case ThemePresetError::bad_line:
+        text = Text(L"A line is not a valid entry.");
+        break;
+    case ThemePresetError::write_failed:
+        text = result.code != ERROR_SUCCESS ? FormatWin32Error(result.code) : Text(L"The file could not be written.");
+        break;
+    }
+    if (result.line > 0)
+    {
+        text.append(L" (").append(Text(L"Line")).append(L": ").append(std::to_wstring(result.line)).append(L")");
+    }
+    if (!result.line_text.empty())
+    {
+        text.append(L"\n").append(result.line_text);
+    }
+    return text;
+}
+
+ThemePresetLoad LoadThemePresetFile(const std::wstring& path, std::vector<ThemePreset>* presets, std::wstring* active_name)
+{
+    ThemePresetLoad load;
+    load.result = ReadThemePresets(path, presets);
+    const ThemePresetResult& result = load.result;
+    if (result.error == ThemePresetError::none && !presets->empty())
+    {
+        load.save_needed = MergeBuiltInThemePresets(presets, *active_name);
+    }
+    else
+    {
+        *presets = BuiltInThemePresets();
+        // missing or empty file gets the built-ins, any other problem leaves the file for the user
+        const bool missing = result.error == ThemePresetError::read_failed &&
+                             (result.code == ERROR_SUCCESS || result.code == ERROR_FILE_NOT_FOUND || result.code == ERROR_PATH_NOT_FOUND);
+        if (missing)
+        {
+            load.result = {};
+        }
+        load.save_needed = missing;
+    }
+    if (const ThemePreset* active = FindThemePreset(*presets, *active_name))
+    {
+        *active_name = active->name;
+    }
+    return load;
 }
 
 bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& active_name)
@@ -360,12 +315,12 @@ bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& a
         return false;
     }
     const auto taken = [presets](std::wstring_view name) {
-        return std::ranges::any_of(*presets, [&](const ThemePreset& preset) { return EqualName(preset.name, name); });
+        return std::ranges::any_of(*presets, [&](const ThemePreset& preset) { return EqualsInsensitive(preset.name, name); });
     };
     bool changed = false;
     for (const ThemePreset& builtin : BuiltInThemePresets())
     {
-        const auto found = std::ranges::find_if(*presets, [&](const ThemePreset& preset) { return EqualName(preset.name, builtin.name); });
+        const auto found = std::ranges::find_if(*presets, [&](const ThemePreset& preset) { return EqualsInsensitive(preset.name, builtin.name); });
         if (found == presets->end())
         {
             presets->push_back(builtin);
@@ -388,7 +343,7 @@ bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& a
         {
             kept = builtin.name + L" " + std::to_wstring(number);
         }
-        if (EqualName(active_name, found->name))
+        if (EqualsInsensitive(active_name, found->name))
         {
             active_name = kept;
         }
@@ -401,7 +356,7 @@ bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& a
 
 const ThemePreset* FindThemePreset(const std::vector<ThemePreset>& presets, std::wstring_view name)
 {
-    const auto found = std::ranges::find_if(presets, [&](const ThemePreset& preset) { return EqualName(preset.name, name); });
+    const auto found = std::ranges::find_if(presets, [&](const ThemePreset& preset) { return EqualsInsensitive(preset.name, name); });
     return found != presets.end() ? &*found : presets.empty() ? nullptr
                                                               : &presets.front();
 }
@@ -425,7 +380,7 @@ bool ParseThemeColor(std::wstring_view text, COLORREF* color)
     {
         return false;
     }
-    text = Trim(text);
+    text = TrimView(text);
     const size_t prefix = text.size() == 7 && text[0] == L'#' ? 1 : text.size() == 8 && text.starts_with(L"0x") ? 2
                                                                                                                 : 0;
     if (prefix != 0)
@@ -485,4 +440,4 @@ bool ParseThemeColor(std::wstring_view text, COLORREF* color)
     return false;
 }
 
-} // namespace win32ui
+}

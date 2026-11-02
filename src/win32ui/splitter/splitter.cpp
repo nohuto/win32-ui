@@ -39,7 +39,6 @@ struct SplitterState
     int size = 0;
 };
 
-// splitter colors
 struct SplitterColors
 {
     COLORREF background = CLR_NONE;
@@ -201,7 +200,7 @@ bool RegisterSplitterClass(HINSTANCE instance)
     return RegisterClassExW(&window_class) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
 }
 
-} // namespace
+}
 
 HWND CreateSplitter(HWND parent, int id, const wchar_t* name, const SplitterHooks* hooks, bool columns, bool resizes_after)
 {
@@ -229,4 +228,4 @@ void RefreshSplitter(HWND splitter)
     InvalidateRect(splitter, nullptr, FALSE);
 }
 
-} // namespace win32ui
+}

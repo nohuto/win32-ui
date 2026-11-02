@@ -8,7 +8,7 @@
 namespace win32ui
 {
 
-// buffers WM_PRINTCLIENT to handle WM_PAINT without flicker
 void PaintBuffered(HWND window);
+LRESULT HandleFillPaint(HWND window, UINT message, WPARAM wparam, HBRUSH brush);
 
-} // namespace win32ui
+}

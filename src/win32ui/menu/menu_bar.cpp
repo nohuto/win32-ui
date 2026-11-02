@@ -180,4 +180,4 @@ void MenuBar::PaintSeparator() const
     }
 }
 
-} // namespace win32ui
+}

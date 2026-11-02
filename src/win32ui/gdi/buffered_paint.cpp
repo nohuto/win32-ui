@@ -24,4 +24,25 @@ void PaintBuffered(HWND window)
     EndPaint(window, &paint);
 }
 
-} // namespace win32ui
+LRESULT HandleFillPaint(HWND window, UINT message, WPARAM wparam, HBRUSH brush)
+{
+    switch (message)
+    {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT:
+        PaintBuffered(window);
+        return 0;
+    case WM_PRINTCLIENT:
+        {
+            RECT client = {};
+            GetClientRect(window, &client);
+            FillRect(reinterpret_cast<HDC>(wparam), &client, brush);
+            return 0;
+        }
+    default:
+        return 0;
+    }
+}
+
+}

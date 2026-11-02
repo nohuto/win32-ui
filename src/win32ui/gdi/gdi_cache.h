@@ -11,4 +11,4 @@ namespace win32ui
 HBRUSH CachedBrush(COLORREF color);
 HPEN CachedPen(COLORREF color, int width = 1);
 
-} // namespace win32ui
+}

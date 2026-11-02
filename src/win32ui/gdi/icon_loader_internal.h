@@ -8,7 +8,7 @@
 namespace win32ui
 {
 
-// system icon such as IDI_WARNING, caller must destroy it
+// caller must destroy it
 HICON LoadSystemIcon(PCWSTR id, int size, UINT dpi);
 
-} // namespace win32ui
+}

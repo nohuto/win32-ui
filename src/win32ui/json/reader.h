@@ -57,6 +57,8 @@ struct JsonErrorSink
     void* context = nullptr;
 };
 
+JsonErrorSink JsonErrorText(std::wstring* destination) noexcept;
+
 class JsonReader
 {
   public:
@@ -134,4 +136,4 @@ class JsonReader
     bool failed_ = false;
 };
 
-} // namespace win32ui
+}

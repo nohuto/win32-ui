@@ -30,7 +30,7 @@ class ColumnModel
     int Subitem(int position) const;
     std::wstring Title(int subitem) const;
     void RecordSort(int subitem, int bits);
-    // lists class procedure below every subclass, in native positions, SendMessage from another thread
+    // below every subclass, SendMessage from another thread
     LRESULT Direct(HWND list, UINT message, WPARAM wparam, LPARAM lparam) const;
     // false on another thread, where Direct sends
     bool Local() const;
@@ -72,4 +72,4 @@ class ColumnModel
     DWORD thread_ = 0;
 };
 
-} // namespace win32ui
+}

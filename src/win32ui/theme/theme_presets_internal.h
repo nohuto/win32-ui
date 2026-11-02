@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "win32ui/theme/preset_editor.h"
+#include "win32ui/text/text.h"
 #include "win32ui/theme/theme_presets.h"
 
 #include <string>
@@ -16,31 +16,28 @@ namespace win32ui
 struct ColorField
 {
     const wchar_t* key;
-    PresetEditorText text;
+    const wchar_t* label;
     COLORREF ThemeColors::* member;
 };
 
 inline constexpr ColorField kColorFields[] = {
-    {L"background", PresetEditorText::background, &ThemeColors::background},
-    {L"panel", PresetEditorText::panel, &ThemeColors::panel},
-    {L"surface", PresetEditorText::surface, &ThemeColors::surface},
-    {L"field", PresetEditorText::field, &ThemeColors::field},
-    {L"header", PresetEditorText::header, &ThemeColors::header},
-    {L"border", PresetEditorText::border, &ThemeColors::border},
-    {L"text", PresetEditorText::text, &ThemeColors::text},
-    {L"muted_text", PresetEditorText::muted_text, &ThemeColors::muted_text},
-    {L"accent", PresetEditorText::accent, &ThemeColors::accent},
-    {L"selection", PresetEditorText::selection, &ThemeColors::selection},
-    {L"selection_text", PresetEditorText::selection_text, &ThemeColors::selection_text},
-    {L"hover", PresetEditorText::hover, &ThemeColors::hover},
-    {L"focus", PresetEditorText::focus, &ThemeColors::focus},
+    {L"background", TextNoop(L"Background"), &ThemeColors::background},
+    {L"panel", TextNoop(L"Panel"), &ThemeColors::panel},
+    {L"surface", TextNoop(L"Surface"), &ThemeColors::surface},
+    {L"field", TextNoop(L"Field"), &ThemeColors::field},
+    {L"header", TextNoop(L"Header"), &ThemeColors::header},
+    {L"border", TextNoop(L"Border"), &ThemeColors::border},
+    {L"text", TextNoop(L"Text"), &ThemeColors::text},
+    {L"muted_text", TextNoop(L"Muted Text"), &ThemeColors::muted_text},
+    {L"accent", TextNoop(L"Accent"), &ThemeColors::accent},
+    {L"selection", TextNoop(L"Selection"), &ThemeColors::selection},
+    {L"selection_text", TextNoop(L"Selection Text"), &ThemeColors::selection_text},
+    {L"hover", TextNoop(L"Hover"), &ThemeColors::hover},
+    {L"focus", TextNoop(L"Focus"), &ThemeColors::focus},
 };
 
-bool EqualName(std::wstring_view left, std::wstring_view right);
-
-// writes thirteen color keys with CRLF
 std::wstring FormatThemePresets(const std::vector<ThemePreset>& presets);
 std::wstring FormatThemeColor(COLORREF color);
 bool ParseThemeColor(std::wstring_view text, COLORREF* color);
 
-} // namespace win32ui
+}

@@ -52,14 +52,14 @@ UINT DpiForWindow(HWND window)
     return caps > 0 ? static_cast<UINT>(caps) : 96;
 }
 
-bool AdjustWindowRectForDpi(RECT* rect, DWORD style, DWORD ex_style, UINT dpi)
+bool AdjustWindowRectForDpi(RECT* rect, DWORD style, DWORD ex_style, UINT dpi, bool menu)
 {
     if (!rect)
     {
         return false;
     }
     static const auto adjust_for_dpi = ImportProc<BOOL(WINAPI*)(RECT*, DWORD, BOOL, DWORD, UINT)>(L"user32.dll", "AdjustWindowRectExForDpi");
-    return (adjust_for_dpi && adjust_for_dpi(rect, style, FALSE, ex_style, dpi)) || AdjustWindowRectEx(rect, style, FALSE, ex_style) != FALSE;
+    return (adjust_for_dpi && adjust_for_dpi(rect, style, menu, ex_style, dpi)) || AdjustWindowRectEx(rect, style, menu, ex_style) != FALSE;
 }
 
 int SystemMetricForDpi(int index, UINT dpi)
@@ -97,4 +97,29 @@ void ClampToWorkArea(RECT* rect)
     *rect = {left, top, left + width, top + height};
 }
 
-} // namespace win32ui
+void RaiseMinTrackSize(HWND window, MINMAXINFO* info, SIZE size_dip, UINT dpi, bool client)
+{
+    if (!info)
+    {
+        return;
+    }
+    RECT rect = {0, 0, Scale(size_dip.cx, dpi), Scale(size_dip.cy, dpi)};
+    if (client)
+    {
+        // GetMenu is only meaningful for top level windows
+        const auto style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_STYLE));
+        AdjustWindowRectForDpi(&rect, style, static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE)), dpi, !(style & WS_CHILD) && GetMenu(window));
+    }
+    info->ptMinTrackSize.x = std::max(info->ptMinTrackSize.x, rect.right - rect.left);
+    info->ptMinTrackSize.y = std::max(info->ptMinTrackSize.y, rect.bottom - rect.top);
+}
+
+void ApplySuggestedRect(HWND window, const RECT* suggested)
+{
+    if (window && suggested)
+    {
+        SetWindowPos(window, nullptr, suggested->left, suggested->top, suggested->right - suggested->left, suggested->bottom - suggested->top, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+}

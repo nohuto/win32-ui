@@ -10,7 +10,6 @@ namespace win32ui
 
 // uxtheme dark mode exports use ordinals, available from Windows 10 1809, null before
 FARPROC UxthemeOrdinal(WORD ordinal);
-// dark/custom status bars paint themselves, built in light keeps native painting
 bool ThemeStatusBarCustom();
 
-} // namespace win32ui
+}

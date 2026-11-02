@@ -80,7 +80,7 @@ class ObjectCache
 ObjectCache<HBRUSH, 16> g_brushes;
 ObjectCache<HPEN, 16> g_pens;
 
-} // namespace
+}
 
 HBRUSH CachedBrush(COLORREF color)
 {
@@ -92,4 +92,4 @@ HPEN CachedPen(COLORREF color, int width)
     return g_pens.Pen(color, width);
 }
 
-} // namespace win32ui
+}

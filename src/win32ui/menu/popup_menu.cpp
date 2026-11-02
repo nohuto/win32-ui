@@ -6,6 +6,7 @@
 #include "win32ui/dialog/dialog_window.h"
 
 #include <algorithm>
+#include <string_view>
 
 namespace win32ui
 {
@@ -18,14 +19,6 @@ std::wstring Label(const wchar_t* text, const wchar_t* shortcut)
     return shortcut && *shortcut ? std::wstring(text) + L'\t' + shortcut : std::wstring(text);
 }
 
-bool IsSeparator(HMENU popup, int position)
-{
-    MENUITEMINFOW item = {sizeof(item)};
-    item.fMask = MIIM_FTYPE | MIIM_SUBMENU;
-    return GetMenuItemInfoW(popup, static_cast<UINT>(position), TRUE, &item) && (item.fType & MFT_SEPARATOR) && !item.hSubMenu;
-}
-
-// true if popup or a submenu has an enabled command
 bool UpdateItems(HMENU popup, const MenuHooks& hooks)
 {
     bool any_enabled = false;
@@ -72,15 +65,90 @@ bool UpdateItems(HMENU popup, const MenuHooks& hooks)
     return any_enabled;
 }
 
-} // namespace
+}
 
-std::wstring MenuName(std::wstring text)
+std::wstring MenuName(std::wstring text, size_t max_chars)
 {
+    constexpr std::wstring_view kEllipsis = L"...";
+    if (max_chars && text.size() > max_chars)
+    {
+        const size_t dots = (std::min)(max_chars, kEllipsis.size());
+        size_t keep = max_chars - dots;
+        keep -= keep && IS_HIGH_SURROGATE(text[keep - 1]) ? 1 : 0;
+        text.resize(keep);
+        text += kEllipsis.substr(0, dots);
+    }
     for (size_t amp = text.find(L'&'); amp != std::wstring::npos; amp = text.find(L'&', amp + 2))
     {
         text.insert(amp, 1, L'&');
     }
     return text;
+}
+
+bool IsMenuSeparator(HMENU menu, int position)
+{
+    MENUITEMINFOW item = {sizeof(item)};
+    item.fMask = MIIM_FTYPE | MIIM_SUBMENU;
+    return GetMenuItemInfoW(menu, static_cast<UINT>(position), TRUE, &item) && (item.fType & MFT_SEPARATOR) && !item.hSubMenu;
+}
+
+void RemoveMenuCommands(HMENU menu, std::span<const int> commands)
+{
+    for (int position = GetMenuItemCount(menu) - 1; position >= 0; --position)
+    {
+        HMENU sub = GetSubMenu(menu, position);
+        const int sub_count = sub ? GetMenuItemCount(sub) : 0;
+        if (sub)
+        {
+            RemoveMenuCommands(sub, commands);
+        }
+        const bool emptied = sub && sub_count > 0 && GetMenuItemCount(sub) == 0;
+        const bool listed = !sub && std::ranges::find(commands, static_cast<int>(GetMenuItemID(menu, position))) != commands.end();
+        if (emptied || listed)
+        {
+            DeleteMenu(menu, static_cast<UINT>(position), MF_BYPOSITION);
+        }
+    }
+    for (int position = GetMenuItemCount(menu) - 1; position >= 0; --position)
+    {
+        if (IsMenuSeparator(menu, position) && (position == 0 || position == GetMenuItemCount(menu) - 1 || IsMenuSeparator(menu, position - 1)))
+        {
+            DeleteMenu(menu, static_cast<UINT>(position), MF_BYPOSITION);
+        }
+    }
+}
+
+int SubMenuWithCommand(HMENU menu, UINT command)
+{
+    const int count = menu ? GetMenuItemCount(menu) : 0;
+    for (int position = 0; position < count; ++position)
+    {
+        HMENU sub = GetSubMenu(menu, position);
+        const int sub_count = sub ? GetMenuItemCount(sub) : 0;
+        for (int item = 0; item < sub_count; ++item)
+        {
+            // GetMenuItemID gives -1 for an item opening a submenu
+            if (!GetSubMenu(sub, item) && GetMenuItemID(sub, item) == command)
+            {
+                return position;
+            }
+        }
+    }
+    return -1;
+}
+
+bool MenuContains(HMENU root, HMENU menu)
+{
+    const int count = root && menu ? GetMenuItemCount(root) : 0;
+    for (int position = 0; position < count; ++position)
+    {
+        HMENU child = GetSubMenu(root, position);
+        if (child && (child == menu || MenuContains(child, menu)))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 void AppendMenuItem(HMENU menu, UINT flags, UINT_PTR id, const wchar_t* text, const wchar_t* shortcut)
@@ -133,7 +201,7 @@ void ReplaceMenuRange(HMENU popup, UINT first, UINT last, UINT before, std::span
             lowest = position;
         }
     }
-    if (lowest > 0 && IsSeparator(popup, lowest - 1))
+    if (lowest > 0 && IsMenuSeparator(popup, lowest - 1))
     {
         DeleteMenu(popup, static_cast<UINT>(lowest - 1), MF_BYPOSITION);
     }
@@ -149,7 +217,7 @@ void ReplaceMenuRange(HMENU popup, UINT first, UINT last, UINT before, std::span
     {
         if (GetMenuItemID(popup, index) == before)
         {
-            position = index > 0 && IsSeparator(popup, index - 1) ? index - 1 : index;
+            position = index > 0 && IsMenuSeparator(popup, index - 1) ? index - 1 : index;
             break;
         }
     }
@@ -166,4 +234,4 @@ void ReplaceMenuRange(HMENU popup, UINT first, UINT last, UINT before, std::span
     }
 }
 
-} // namespace win32ui
+}

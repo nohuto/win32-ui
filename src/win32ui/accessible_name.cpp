@@ -3,6 +3,8 @@
 
 #include "win32ui/accessible_name.h"
 
+#include "win32ui/window.h"
+
 #include <commctrl.h>
 #include <initguid.h>
 #include <oleacc.h>
@@ -48,7 +50,7 @@ LRESULT CALLBACK NameProc(HWND window, UINT message, WPARAM wparam, LPARAM lpara
     return DefSubclassProc(window, message, wparam, lparam);
 }
 
-} // namespace
+}
 
 void SetAccessibleName(HWND window, std::wstring_view name)
 {
@@ -58,10 +60,9 @@ void SetAccessibleName(HWND window, std::wstring_view name)
         return;
     }
     const std::wstring copy(name);
-    if (SUCCEEDED(services->SetHwndPropStr(window, static_cast<DWORD>(OBJID_CLIENT), CHILDID_SELF, PROPID_ACC_NAME, copy.c_str())) &&
-        !GetWindowSubclass(window, NameProc, kNameSubclassId, nullptr))
+    if (SUCCEEDED(services->SetHwndPropStr(window, static_cast<DWORD>(OBJID_CLIENT), CHILDID_SELF, PROPID_ACC_NAME, copy.c_str())))
     {
-        SetWindowSubclass(window, NameProc, kNameSubclassId, 0);
+        EnsureSubclass(window, NameProc, kNameSubclassId);
     }
 }
 
@@ -76,4 +77,4 @@ void ReleaseAccessibility()
     g_services_tried = false;
 }
 
-} // namespace win32ui
+}

@@ -24,7 +24,6 @@ class JsonWriter
     void String(std::wstring_view key, std::wstring_view value);
     void Unsigned(std::wstring_view key, std::uint64_t value);
     void Signed(std::wstring_view key, std::int64_t value);
-    // fixed decimals use a period, digits clamp to 0 through 16, nonfinite values become null
     void Number(std::wstring_view key, double value, int digits);
     void Bool(std::wstring_view key, bool value);
     void Null(std::wstring_view key);
@@ -45,4 +44,4 @@ class JsonWriter
     std::vector<Container> stack_;
 };
 
-} // namespace win32ui
+}

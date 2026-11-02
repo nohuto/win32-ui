@@ -8,6 +8,7 @@
 #include "win32ui/gdi/gdi_cache.h"
 #include "win32ui/gdi/icon_loader.h"
 #include "win32ui/theme/palette.h"
+#include "win32ui/window.h"
 #include "win32ui/window_metrics.h"
 
 #include <algorithm>
@@ -266,7 +267,7 @@ LRESULT CALLBACK ToolbarProc(HWND toolbar, UINT message, WPARAM wparam, LPARAM l
     return DefSubclassProc(toolbar, message, wparam, lparam);
 }
 
-} // namespace
+}
 
 HWND CreateToolbar(HWND parent, int id, const wchar_t* name, const ToolbarHooks* hooks, const std::vector<ToolbarButton>& buttons)
 {
@@ -328,17 +329,10 @@ void RefreshToolbar(HWND toolbar)
     {
         return;
     }
-    // WM_SETREDRAW would show a hidden toolbar
-    const bool shown = IsWindowVisible(toolbar) != FALSE;
-    if (shown)
     {
-        SendMessageW(toolbar, WM_SETREDRAW, FALSE, 0);
-    }
-    LoadIcons(toolbar, state);
-    SendMessageW(toolbar, TB_AUTOSIZE, 0, 0);
-    if (shown)
-    {
-        SendMessageW(toolbar, WM_SETREDRAW, TRUE, 0);
+        const RedrawScope redraw(toolbar, 0);
+        LoadIcons(toolbar, state);
+        SendMessageW(toolbar, TB_AUTOSIZE, 0, 0);
     }
     ApplyFrame(state->hooks, toolbar);
     ApplyFrame(state->hooks, reinterpret_cast<HWND>(SendMessageW(toolbar, TB_GETTOOLTIPS, 0, 0)));
@@ -418,4 +412,4 @@ bool ToolbarNotify(NMHDR* header, LRESULT* result)
     return false;
 }
 
-} // namespace win32ui
+}

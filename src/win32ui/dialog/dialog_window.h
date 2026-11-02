@@ -16,14 +16,14 @@
 namespace win32ui
 {
 
-// registers the shared DialogWindow class once, all dialogs use theme
-// icon is a resource of instance
 bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const DialogTheme* theme, int icon);
 
+// UI thread only, cancel(context) lets CancelOpenDialogs close UI that isnt a DialogWindow and must not pump messages
 class ModalScope
 {
   public:
     ModalScope();
+    ModalScope(void (*cancel)(void* context), void* context);
     ~ModalScope();
     ModalScope(const ModalScope&) = delete;
     ModalScope& operator=(const ModalScope&) = delete;
@@ -35,7 +35,6 @@ class DialogWindow
 {
   public:
     virtual ~DialogWindow() = default;
-    // returns the End result, or IDCANCEL if window creation fails
     INT_PTR RunModal(HWND owner, const wchar_t* template_name);
     // owner must pass messages through IsDialogMessage, End destroys modeless window
     bool OpenModeless(HWND owner, const wchar_t* template_name);
@@ -48,12 +47,9 @@ class DialogWindow
   protected:
     virtual void OnCreate() = 0;
     virtual void OnLayout(int width, int height) = 0;
-    // unhandled IDOK and IDCANCEL end the dialog with that id, closing uses IDCANCEL
     virtual bool OnCommand(int id, int code, HWND control);
     virtual LRESULT OnNotify(NMHDR* header, bool* handled);
-    // called before handling every message except WM_INITDIALOG, true when handled
     virtual bool OnMessage(UINT message, WPARAM wparam, LPARAM lparam, LRESULT* result);
-    // initial focus control, null or disabled falls back to the default button
     virtual HWND initial_focus() const
     {
         return nullptr;
@@ -67,9 +63,7 @@ class DialogWindow
     {
         return hwnd_;
     }
-    // theme passed to RegisterDialogClass
     static const DialogTheme* theme() noexcept;
-    // object for a window of the registered dialog class
     static DialogWindow* FromWindow(HWND window) noexcept;
     const FontSet& fonts() const noexcept
     {
@@ -126,4 +120,4 @@ HWND OpenProcDialog(const wchar_t* template_name, DLGPROC proc, LPARAM param, HW
 void EndDialogWindow(HWND dialog, INT_PTR result);
 void AnchorDialogControls(HWND dialog, std::initializer_list<AnchorRule> rules);
 
-} // namespace win32ui
+}

@@ -6,7 +6,7 @@
 #include "win32ui/accessible_name.h"
 #include "win32ui/dialog/dialog_layout_internal.h"
 #include "win32ui/gdi/buffered_paint.h"
-#include "win32ui/gdi/fonts_internal.h"
+#include "win32ui/gdi/fonts.h"
 #include "win32ui/gdi/gdi_cache.h"
 #include "win32ui/theme/palette.h"
 #include "win32ui/theme/palette_internal.h"
@@ -32,7 +32,6 @@ constexpr UINT_PTR kMessageTimer = 1;
 constexpr int kPartMarginDip = 18;
 constexpr int kHeightMarginDip = 5;
 constexpr int kTipMaxWidthDip = 560;
-// text inset from part border
 constexpr int kTextInset = 4;
 
 struct StatusState
@@ -54,15 +53,12 @@ StatusState* StateOf(HWND bar)
     return bar && GetWindowSubclass(bar, StatusProc, kStatusSubclassId, &data) ? reinterpret_cast<StatusState*>(data) : nullptr;
 }
 
-// status bar colors
 struct StatusBarColors
 {
     COLORREF background = CLR_NONE;
     COLORREF text = CLR_NONE;
     COLORREF border = CLR_NONE;
-    // false keeps the native drawing
     bool custom_paint = false;
-    // progress block color during custom painting
     COLORREF accent = CLR_NONE;
 };
 
@@ -154,7 +150,6 @@ int TextRoom(HWND bar, const RECT& part)
     return static_cast<int>(part.right - part.left) - 2 * (borders[2] + kTextInset);
 }
 
-// match native bars, hide size grip while parent is maximized
 bool GripShown(HWND bar)
 {
     return (GetWindowLongPtrW(bar, GWL_STYLE) & SBARS_SIZEGRIP) && !IsZoomed(GetParent(bar));
@@ -244,7 +239,6 @@ void LayoutParts(HWND bar, StatusState* state)
                 end -= widths[index];
             }
             edges[fill] = end;
-            // shrink the fill part first, then neighboring parts when space runs out
             for (size_t index = fill; index < widths.size(); ++index)
             {
                 edges[index] = std::max(edges[index], index > 0 ? edges[index - 1] : 0);
@@ -373,7 +367,6 @@ LRESULT CALLBACK StatusProc(HWND bar, UINT message, WPARAM wparam, LPARAM lparam
             state->tip_text = state->hooks && state->hooks->part_tip ? state->hooks->part_tip(state->hooks->context, part) : std::wstring();
             if (state->tip_text.empty())
             {
-                // show full text only for truncated parts
                 state->tip_text = PartText(bar, part);
                 RECT rect = {};
                 SendMessageW(bar, SB_GETRECT, part, reinterpret_cast<LPARAM>(&rect));
@@ -401,7 +394,7 @@ LRESULT CALLBACK StatusProc(HWND bar, UINT message, WPARAM wparam, LPARAM lparam
     return DefSubclassProc(bar, message, wparam, lparam);
 }
 
-} // namespace
+}
 
 HWND CreateStatusBar(HWND parent, int id, const wchar_t* name, const StatusBarHooks* hooks)
 {
@@ -502,7 +495,6 @@ void ShowStatusProgress(HWND bar, int part, bool shown)
     }
     state->progress_part = shown ? part : -1;
     PlaceProgress(bar, state);
-    // missing parts keep progress hidden
     shown = state->progress_part >= 0;
     SendMessageW(state->progress, PBM_SETMARQUEE, shown ? TRUE : FALSE, 30);
     ShowWindow(state->progress, shown ? SW_SHOWNA : SW_HIDE);
@@ -524,4 +516,4 @@ void RefreshStatusBar(HWND bar)
     InvalidateRect(bar, nullptr, TRUE);
 }
 
-} // namespace win32ui
+}

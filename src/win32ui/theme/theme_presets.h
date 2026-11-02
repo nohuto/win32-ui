@@ -33,7 +33,19 @@ struct ThemePresetResult
 {
     ThemePresetError error = ThemePresetError::none;
     int line = 0;
+    DWORD code = 0;
+    std::wstring line_text;
 };
+
+std::wstring ThemePresetErrorText(const ThemePresetResult& result);
+
+struct ThemePresetLoad
+{
+    ThemePresetResult result;
+    bool save_needed = false;
+};
+
+ThemePresetLoad LoadThemePresetFile(const std::wstring& path, std::vector<ThemePreset>* presets, std::wstring* active_name);
 
 const std::vector<ThemePreset>& BuiltInThemePresets();
 
@@ -44,4 +56,4 @@ ThemePresetResult WriteThemePresets(const std::wstring& path, const std::vector<
 bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& active_name);
 const ThemePreset* FindThemePreset(const std::vector<ThemePreset>& presets, std::wstring_view name);
 
-} // namespace win32ui
+}

@@ -6,7 +6,6 @@
 namespace win32ui
 {
 
-// call after changing the app theme
 void ReapplyThemeToDialogs();
 
-} // namespace win32ui
+}

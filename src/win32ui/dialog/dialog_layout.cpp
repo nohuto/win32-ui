@@ -7,6 +7,7 @@
 #include "win32ui/dialog/dialog_metrics.h"
 #include "win32ui/gdi/gdi_cache.h"
 #include "win32ui/theme/palette.h"
+#include "win32ui/window.h"
 #include "win32ui/window_metrics.h"
 
 #include <commctrl.h>
@@ -208,27 +209,30 @@ void SetThinBorder(HWND control)
     SetWindowPos(control, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 }
 
-} // namespace
-
-bool ClassIs(HWND window, const wchar_t* name)
-{
-    wchar_t buffer[64] = {};
-    return window && GetClassNameW(window, buffer, static_cast<int>(std::size(buffer))) > 0 && _wcsicmp(buffer, name) == 0;
-}
-
-std::wstring WindowText(HWND window)
-{
-    std::wstring text(static_cast<size_t>(std::max(0, GetWindowTextLengthW(window))), L'\0');
-    if (!text.empty())
-    {
-        text.resize(static_cast<size_t>(GetWindowTextW(window, text.data(), static_cast<int>(text.size()) + 1)));
-    }
-    return text;
 }
 
 HWND CreateTooltip(HWND owner)
 {
     return CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_NOPREFIX | TTS_ALWAYSTIP, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, owner, nullptr, nullptr, nullptr);
+}
+
+int TextHeight(HWND window, HFONT font, std::wstring_view text, int width, UINT format)
+{
+    if (text.size() > static_cast<size_t>(INT_MAX))
+    {
+        return 0;
+    }
+    HDC dc = GetDC(window);
+    if (!dc)
+    {
+        return 0;
+    }
+    HGDIOBJ old = SelectObject(dc, font);
+    RECT rect = {0, 0, std::max(1, width), 0};
+    DrawTextW(dc, text.data(), static_cast<int>(text.size()), &rect, DT_CALCRECT | DT_NOPREFIX | format);
+    SelectObject(dc, old);
+    ReleaseDC(window, dc);
+    return rect.bottom;
 }
 
 HWND CreateControl(HWND parent, const wchar_t* class_name, const wchar_t* text, DWORD style, int id)
@@ -322,6 +326,27 @@ void FitDialogHeight(HWND dialog, int client_height)
     SetWindowPos(dialog, nullptr, 0, 0, want.right - want.left, want.bottom - want.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+std::vector<int> ShareSpace(std::span<const int> wanted, int total, int minimum)
+{
+    std::vector<size_t> order(wanted.size());
+    for (size_t index = 0; index < order.size(); ++index)
+    {
+        order[index] = index;
+    }
+    std::stable_sort(order.begin(), order.end(), [&](size_t left, size_t right) { return wanted[left] < wanted[right]; });
+    std::vector<int> sizes(wanted.size());
+    // 64-bit, the rest can pass the int range at the extremes
+    long long remaining = total;
+    for (size_t position = 0; position < order.size(); ++position)
+    {
+        const size_t index = order[position];
+        const long long share = remaining / static_cast<long long>(order.size() - position);
+        sizes[index] = static_cast<int>(std::max<long long>(minimum, std::min<long long>(wanted[index], share)));
+        remaining -= sizes[index];
+    }
+    return sizes;
+}
+
 void FitDialogText(HWND dialog)
 {
     struct Control
@@ -341,8 +366,8 @@ void FitDialogText(HWND dialog)
         int short_by = 0;
     };
     std::vector<Control> controls;
-    // a group box over an earlier one of the same size takes that ones final rectangle, laid out on its own each of
-    // the two would be the others container
+    // group box over an earlier one of the same size takes that ones final rectangle, laid out on its own each of the
+    // two would be the others container
     std::vector<std::pair<HWND, size_t>> overlays;
     for (HWND child = GetWindow(dialog, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
     {
@@ -357,8 +382,7 @@ void FitDialogText(HWND dialog)
         const LONG_PTR type = style & BS_TYPEMASK;
         Control control;
         control.hwnd = child;
-        GetWindowRect(child, &control.rect);
-        MapWindowPoints(nullptr, dialog, reinterpret_cast<POINT*>(&control.rect), 2);
+        ChildRect(dialog, child, &control.rect);
         control.initial = control.rect;
         control.fit = TextFitWidth(child);
         control.field = !button && (!SameClass(class_name, WC_STATICW) || GetWindowTextLengthW(child) == 0);
@@ -787,4 +811,4 @@ void CollapseSection(HWND dialog, int control_id)
     SetWindowPos(dialog, nullptr, 0, 0, window.right - window.left, window.bottom - window.top - shift, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
-} // namespace win32ui
+}

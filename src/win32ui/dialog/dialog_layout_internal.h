@@ -6,18 +6,16 @@
 #include <windows.h>
 
 #include <string>
+#include <string_view>
 
 namespace win32ui
 {
 
-bool ClassIs(HWND window, const wchar_t* name);
-std::wstring WindowText(HWND window);
 HWND CreateTooltip(HWND owner);
 
 void EraseDialogBackground(HWND dialog, HDC hdc, HBRUSH background);
 bool IsOnSizeGrip(HWND dialog, LPARAM screen_point);
 
-// frame hook for a control and its owned windows
 template <typename Hooks>
 void ApplyFrame(const Hooks* hooks, HWND window)
 {
@@ -27,4 +25,4 @@ void ApplyFrame(const Hooks* hooks, HWND window)
     }
 }
 
-} // namespace win32ui
+}

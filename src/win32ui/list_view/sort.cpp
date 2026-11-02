@@ -5,14 +5,53 @@
 
 #include "win32ui/list_view/list_view.h"
 #include "win32ui/list_view/list_view_internal.h"
+#include "win32ui/system/strings.h"
 
 #include <commctrl.h>
+
+#include <clocale>
+#include <cstdlib>
+#include <cwctype>
+#include <iterator>
+#include <string>
 
 namespace win32ui
 {
 
 namespace
 {
+
+bool CellNumber(std::wstring_view text, double* value)
+{
+    static const _locale_t c_locale = _create_locale(LC_NUMERIC, "C");
+    const size_t start = text.find_first_not_of(L' ');
+    if (start == std::wstring_view::npos)
+    {
+        return false;
+    }
+    text.remove_prefix(start);
+    const auto digit = [](wchar_t character) { return _iswdigit_l(character, c_locale) != 0; };
+    if (!digit(text[0]) && !((text[0] == L'-' || text[0] == L'.') && text.size() > 1 && digit(text[1])))
+    {
+        return false;
+    }
+    // wcstod needs a terminated copy
+    wchar_t short_text[64];
+    std::wstring long_text;
+    const wchar_t* terminated = short_text;
+    if (text.size() < std::size(short_text))
+    {
+        short_text[text.copy(short_text, text.size())] = L'\0';
+    }
+    else
+    {
+        long_text.assign(text);
+        terminated = long_text.c_str();
+    }
+    wchar_t* end = nullptr;
+    *value = _wcstod_l(terminated, &end, c_locale);
+    return end != terminated;
+}
 
 struct SortContext
 {
@@ -32,7 +71,41 @@ int CALLBACK CompareItems(LPARAM left, LPARAM right, LPARAM parameter)
                                         : 0;
 }
 
-} // namespace
+}
+
+int CompareListText(std::wstring_view left, std::wstring_view right, bool numbers)
+{
+    if (numbers)
+    {
+        double left_value = 0;
+        double right_value = 0;
+        const bool left_number = CellNumber(left, &left_value);
+        const bool right_number = CellNumber(right, &right_value);
+        if (left_number != right_number)
+        {
+            return left_number ? -1 : 1;
+        }
+        if (left_number && left_value != right_value)
+        {
+            return left_value < right_value ? -1 : 1;
+        }
+    }
+    if (left.empty() || right.empty())
+    {
+        return static_cast<int>(left.empty()) - static_cast<int>(right.empty());
+    }
+    return CompareInsensitive(left, right);
+}
+
+int CALLBACK CompareTextRows(LPARAM left, LPARAM right, int column, void* rows)
+{
+    const TextRows& table = *static_cast<const TextRows*>(rows);
+    const auto cell = [&](LPARAM row) {
+        const size_t index = static_cast<size_t>(row);
+        return index < table.size() && column >= 0 && static_cast<size_t>(column) < table[index].size() ? std::wstring_view(table[index][static_cast<size_t>(column)]) : std::wstring_view();
+    };
+    return CompareListText(cell(left), cell(right), true);
+}
 
 void UpdateListSortState(int column, bool toggle, int* sort_column, bool* ascending, SortKeys* earlier)
 {
@@ -114,4 +187,4 @@ void UpdateListViewSort(HWND list, int column, bool ascending)
     }
 }
 
-} // namespace win32ui
+}

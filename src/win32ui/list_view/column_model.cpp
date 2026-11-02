@@ -19,9 +19,9 @@ bool OwnerData(HWND list)
     return (GetWindowLongPtrW(list, GWL_STYLE) & LVS_OWNERDATA) != 0;
 }
 
-} // namespace
+}
 
-// a subclass above the list can send its own messages first, only this exact call passes untranslated
+// subclass above the list can send its own messages first, only this exact call passes untranslated
 LRESULT ColumnModel::Native(HWND list, UINT message, WPARAM wparam, LPARAM lparam)
 {
     const Pending outer = pending_;
@@ -244,14 +244,14 @@ void ColumnModel::Hide(HWND list, int subitem)
     HDITEMW header_item = {};
     header_item.mask = HDI_FORMAT;
     HWND header = ListView_GetHeader(list);
-    // a format change can clear the arrow first, the recorded sort stays then
+    // format change can clear the arrow first, the recorded sort stays then
     if (const int sort = header && Header_GetItem(header, position, &header_item) ? header_item.fmt & (HDF_SORTUP | HDF_SORTDOWN) : 0)
     {
         column.sort = sort;
     }
     if (!OwnerData(list))
     {
-        // the native list drops a deleted columns text, keep it by item id so sorting while hidden is safe, a cell
+        // native list drops the text of a deleted column, keep it by item id so sorting while hidden is safe, a cell
         // without text of its own (never set or LPSTR_TEXTCALLBACK) stays out and asks the parent again when read
         const int rows = static_cast<int>(Direct(list, LVM_GETITEMCOUNT, 0, 0));
         std::vector<wchar_t> buffer(1024);
@@ -270,7 +270,7 @@ void ColumnModel::Hide(HWND list, int subitem)
                 {
                     break;
                 }
-                // the list may point at its own copy instead of filling the buffer
+                // list may point at its own copy instead of filling the buffer
                 const bool own = item.pszText != buffer.data();
                 const size_t length = own ? (item.pszText ? std::wcslen(item.pszText) : 0) : wcsnlen_s(buffer.data(), buffer.size());
                 if (own || length + 1 < buffer.size())
@@ -426,7 +426,7 @@ bool ColumnModel::HiddenText(HWND list, UINT message, LVITEMW* item, LRESULT* re
         {
             text = info.item.pszText;
         }
-        // LVIF_DI_SETITEM makes the answer the cells own text, as in a shown column
+        // LVIF_DI_SETITEM makes the answer the text of the cell itself, as in a shown column
         const size_t subitem = static_cast<size_t>(item->iSubItem);
         if ((info.item.mask & LVIF_DI_SETITEM) && !OwnerData(list) && subitem < columns_.size() && !columns_[subitem].shown)
         {
@@ -501,7 +501,7 @@ bool ColumnModel::Translate(HWND list, UINT message, WPARAM wparam, LPARAM lpara
                 entry -= entry > index ? 1 : 0;
             }
             Rebuild();
-            // the new first column holds the item text and must be in place
+            // new first column holds the item text and must be in place
             if (!columns_.empty() && !columns_[0].shown)
             {
                 Show(list, 0, 0);
@@ -773,4 +773,4 @@ int* ColumnModel::NotifySubitem(NMHDR* header) const
     }
 }
 
-} // namespace win32ui
+}

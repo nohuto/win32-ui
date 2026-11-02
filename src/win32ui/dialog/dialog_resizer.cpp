@@ -3,6 +3,8 @@
 
 #include "win32ui/dialog/dialog_resizer.h"
 
+#include "win32ui/window.h"
+
 #include <algorithm>
 
 namespace win32ui
@@ -27,13 +29,11 @@ void DialogResizer::Attach(HWND dialog, const std::vector<AnchorRule>& rules)
     items_.reserve(rules.size());
     for (const AnchorRule& rule : rules)
     {
-        HWND control = GetDlgItem(dialog, rule.id);
         RECT rect = {};
-        if (!control || !GetWindowRect(control, &rect))
+        if (!ChildRect(dialog, GetDlgItem(dialog, rule.id), &rect))
         {
             continue;
         }
-        MapWindowPoints(nullptr, dialog, reinterpret_cast<POINT*>(&rect), 2);
         items_.push_back({rule.id, rule.anchors, rect});
     }
 }
@@ -98,4 +98,4 @@ void DialogResizer::Rescale(UINT from_dpi, UINT to_dpi)
     client_ = {scale(client_.cx), scale(client_.cy)};
 }
 
-} // namespace win32ui
+}

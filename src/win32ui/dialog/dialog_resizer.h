@@ -44,4 +44,4 @@ class DialogResizer
     SIZE client_ = {};
 };
 
-} // namespace win32ui
+}

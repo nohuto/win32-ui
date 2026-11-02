@@ -34,7 +34,10 @@ void ShortcutTable::Create(std::span<const Shortcut> shortcuts)
     table.reserve(shortcuts.size());
     for (const Shortcut& shortcut : shortcuts)
     {
-        table.push_back({static_cast<BYTE>(FVIRTKEY | shortcut.modifiers), shortcut.key, static_cast<WORD>(shortcut.command)});
+        if (shortcut.key)
+        {
+            table.push_back({static_cast<BYTE>(FVIRTKEY | shortcut.modifiers), shortcut.key, static_cast<WORD>(shortcut.command)});
+        }
     }
     if (accelerators_)
     {
@@ -52,4 +55,4 @@ bool TranslateShortcuts(HWND main, const ShortcutTable& table, MSG* message, boo
     return TranslateAcceleratorW(main, table.accelerators(), message) != FALSE;
 }
 
-} // namespace win32ui
+}

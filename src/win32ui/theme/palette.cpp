@@ -115,7 +115,7 @@ PaletteState& Ready()
     return state;
 }
 
-} // namespace
+}
 
 FARPROC UxthemeOrdinal(WORD ordinal)
 {
@@ -210,4 +210,4 @@ bool ParseThemeMode(std::wstring_view name, ThemeMode* mode)
     return false;
 }
 
-} // namespace win32ui
+}

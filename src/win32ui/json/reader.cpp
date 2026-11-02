@@ -3,7 +3,8 @@
 
 #include "win32ui/json/reader.h"
 
-#include "win32ui/hex_digit_internal.h"
+#include "win32ui/system/strings.h"
+#include "win32ui/text/text.h"
 
 #include <cwchar>
 
@@ -12,6 +13,87 @@ namespace win32ui
 
 namespace
 {
+
+const wchar_t* ErrorMessage(JsonErrorCode code) noexcept
+{
+    switch (code)
+    {
+    case JsonErrorCode::kExpectedCharacter:
+        return TextNoop(L"Expected '%c'.");
+    case JsonErrorCode::kTooDeep:
+        return TextNoop(L"The file is nested too deeply.");
+    case JsonErrorCode::kUnterminatedComment:
+        return TextNoop(L"An unterminated block comment is not allowed.");
+    case JsonErrorCode::kUnexpectedToken:
+        return TextNoop(L"Unexpected token.");
+    case JsonErrorCode::kStringTooLong:
+        return TextNoop(L"A text member is longer than the format allows.");
+    case JsonErrorCode::kUnterminatedString:
+        return TextNoop(L"The file ends inside a string.");
+    case JsonErrorCode::kUnescapedControl:
+        return TextNoop(L"A string contains an unescaped control character.");
+    case JsonErrorCode::kMalformedEscape:
+        return TextNoop(L"A string contains a malformed escape.");
+    case JsonErrorCode::kUnsupportedEscape:
+        return TextNoop(L"A string contains an unsupported escape.");
+    case JsonErrorCode::kUnsignedExpected:
+        return TextNoop(L"An unsigned number was expected.");
+    case JsonErrorCode::kLeadingZero:
+        return TextNoop(L"A number has a leading zero.");
+    case JsonErrorCode::kNumberOutOfRange:
+        return TextNoop(L"A number is out of range.");
+    case JsonErrorCode::kIntegersOnly:
+        return TextNoop(L"Only integers are supported.");
+    case JsonErrorCode::kBooleanExpected:
+        return TextNoop(L"A boolean was expected.");
+    case JsonErrorCode::kEmptyFraction:
+        return TextNoop(L"A number has an empty fraction.");
+    case JsonErrorCode::kEmptyExponent:
+        return TextNoop(L"A number has an empty exponent.");
+    case JsonErrorCode::kTrailingContent:
+        return TextNoop(L"The file contains trailing content.");
+    default:
+        return L"";
+    }
+}
+
+void WriteErrorText(void* context, const JsonDiagnostic& diagnostic, std::wstring_view custom_text)
+{
+    auto* destination = static_cast<std::wstring*>(context);
+    if (!destination || !destination->empty() || !diagnostic.first_failure || diagnostic.code == JsonErrorCode::kNone)
+    {
+        return;
+    }
+    if (diagnostic.code == JsonErrorCode::kCustom)
+    {
+        if (custom_text.empty())
+        {
+            destination->assign(Text(L"The file isn't valid JSON."));
+        }
+        else
+        {
+            destination->assign(custom_text);
+        }
+    }
+    else
+    {
+        destination->assign(Text(ErrorMessage(diagnostic.code)));
+        // replaced by hand, a translated format must not reach printf
+        if (const size_t mark = destination->find(L"%c"); diagnostic.code == JsonErrorCode::kExpectedCharacter && mark != std::wstring::npos)
+        {
+            destination->replace(mark, 2, 1, diagnostic.expected);
+        }
+    }
+    destination->append(L" (")
+        .append(Text(L"Line"))
+        .append(L": ")
+        .append(std::to_wstring(diagnostic.position.line))
+        .append(L", ")
+        .append(Text(L"Column"))
+        .append(L": ")
+        .append(std::to_wstring(diagnostic.position.column))
+        .append(L")");
+}
 
 bool Digit(wchar_t character)
 {
@@ -39,7 +121,12 @@ bool Hex4(std::wstring_view text, std::size_t* cursor, unsigned* value)
     return true;
 }
 
-} // namespace
+}
+
+JsonErrorSink JsonErrorText(std::wstring* destination) noexcept
+{
+    return {WriteErrorText, destination};
+}
 
 JsonReader::JsonReader(std::wstring_view text, JsonErrorSink errors, int max_depth) noexcept
     : text_(text), errors_(errors), max_depth_(max_depth)
@@ -392,4 +479,4 @@ bool JsonReader::End()
     return !failed_ && (cursor_ == text_.size() || Fail(JsonErrorCode::kTrailingContent));
 }
 
-} // namespace win32ui
+}

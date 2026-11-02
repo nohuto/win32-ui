@@ -4,16 +4,18 @@
 #pragma once
 
 #include "win32ui/dialog/dialog_layout.h"
+#include "win32ui/list_view/list_view.h"
 #include "win32ui/theme/palette.h"
 
 #include <windows.h>
 
 #include <commctrl.h>
 
+#include <vector>
+
 namespace win32ui
 {
 
-// static label role for WM_CTLCOLORSTATIC
 enum class TextRole
 {
     normal,
@@ -24,11 +26,22 @@ enum class TextRole
 void ApplyThemeToWindow(HWND window);
 void SetThemeClass(HWND window, const wchar_t* dark_class);
 void ReapplyTheme(HWND top_level);
+void ReapplyFonts(HWND root, HFONT font);
 HBRUSH ThemeControlColor(UINT message, HDC hdc, HWND control);
-// NM_CUSTOMDRAW for check boxes, radio buttons and trees
 bool ThemeCustomDraw(NMHDR* header, LRESULT* result);
 void SetTextRole(HWND label, TextRole role);
 
-DialogTheme ThemeDialogHooks();
+enum DialogPrepare : unsigned
+{
+    kPrepareTranslate = 1,   // TranslateWindowTexts
+    kPrepareNoTextLimit = 2, // edits and combo boxes take any length
+    kPrepareSingleLine = 4,  // KeepSingleLine for writable ES_MULTILINE edits
+};
 
-} // namespace win32ui
+// returns static storage
+const DialogTheme* ThemeDialogHooks(unsigned prepare = 0);
+ListViewHooks DialogListHooks(bool (*row_menu)(void* context, HWND list, int row, POINT screen) = nullptr);
+// hooks must outlive the list
+bool SetupDialogList(HWND list, const ListViewHooks* hooks, DWORD extra_styles = 0, std::vector<ListColumn> columns = {});
+
+}

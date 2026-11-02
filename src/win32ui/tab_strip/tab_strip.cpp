@@ -6,8 +6,9 @@
 #include "win32ui/accessible_name.h"
 #include "win32ui/dialog/dialog_layout_internal.h"
 #include "win32ui/gdi/buffered_paint.h"
-#include "win32ui/gdi/fonts_internal.h"
+#include "win32ui/gdi/fonts.h"
 #include "win32ui/gdi/gdi_cache.h"
+#include "win32ui/text/text.h"
 #include "win32ui/theme/palette.h"
 #include "win32ui/window_metrics.h"
 
@@ -72,7 +73,6 @@ TabState* StateOf(HWND strip)
     return strip && GetWindowSubclass(strip, TabProc, kTabSubclassId, &data) ? reinterpret_cast<TabState*>(data) : nullptr;
 }
 
-// tab colors
 struct TabStripColors
 {
     COLORREF background = CLR_NONE;
@@ -152,7 +152,7 @@ bool CloseRect(HWND strip, const TabState* state, int index, RECT* rect)
 // padding applies to every tab, so the x space comes from an item image
 void ReserveCloseRoom(HWND strip, TabState* state, UINT dpi)
 {
-    // the tab control adds the image width plus the horizontal padding
+    // tab control adds the image width plus the horizontal padding
     const int width = std::max(1, Scale(kCloseDip + 2 * kCloseGapDip, dpi) - 2 * Scale(kPadXDip, dpi));
     if (!state->close_room || state->close_room_width != width)
     {
@@ -183,7 +183,6 @@ void ReserveCloseRoom(HWND strip, TabState* state, UINT dpi)
     }
 }
 
-// label space left of the close button
 RECT LabelRect(HWND strip, const TabState* state, int index, const RECT& item)
 {
     const UINT dpi = WindowDpi(strip);
@@ -360,7 +359,7 @@ class TabAccessible final : public IAccessible
         {
             return standard_->get_accName(child, name);
         }
-        *name = SysAllocString((*link_)->hooks->close_name);
+        *name = SysAllocString(Text(L"Close Tab"));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_accValue(VARIANT child, BSTR* value) override
@@ -692,7 +691,6 @@ void SetMultiline(HWND strip, bool multiline)
     }
 }
 
-// measure row height at width by resizing without redraw
 int RowsHeight(HWND strip, int width, int row_height)
 {
     RECT window = {};
@@ -778,7 +776,7 @@ LRESULT CALLBACK TabProc(HWND strip, UINT message, WPARAM wparam, LPARAM lparam,
         }
         break;
     case WM_GETOBJECT:
-        if (static_cast<LONG>(lparam) == OBJID_CLIENT && state->hooks && state->hooks->close && state->hooks->close_name)
+        if (static_cast<LONG>(lparam) == OBJID_CLIENT && state->hooks && state->hooks->close)
         {
             IAccessible* standard = nullptr;
             if (SUCCEEDED(CreateStdAccessibleObject(strip, OBJID_CLIENT, IID_IAccessible, reinterpret_cast<void**>(&standard))))
@@ -907,7 +905,7 @@ LRESULT CALLBACK TabProc(HWND strip, UINT message, WPARAM wparam, LPARAM lparam,
     return DefSubclassProc(strip, message, wparam, lparam);
 }
 
-} // namespace
+}
 
 HWND CreateTabStrip(HWND parent, int id, const wchar_t* name, const TabStripHooks* hooks)
 {
@@ -1001,7 +999,6 @@ int FitTabStrip(HWND strip, int width, int max_height)
     state->fit_height = RowsHeight(strip, width, row_height);
     if (state->fit_height > max_height)
     {
-        // rows exceed available height
         SetMultiline(strip, false);
         state->fit_height = row_height;
         // reselect to scroll the single row to the active tab, TCM_SETCURSEL sends no notification
@@ -1027,4 +1024,4 @@ void DrawCloseGlyph(HDC hdc, const RECT& rect, COLORREF color, UINT dpi)
     SelectObject(hdc, old_pen);
 }
 
-} // namespace win32ui
+}

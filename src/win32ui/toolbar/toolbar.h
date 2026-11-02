@@ -17,9 +17,7 @@ namespace win32ui
 
 struct ToolbarButton
 {
-    // 0 for a separator
     int command = 0;
-    // accessible name and fallback tooltip
     std::wstring name;
     bool dropdown = false;
 };
@@ -40,4 +38,4 @@ int ToolbarHeight(HWND toolbar);
 void EnableToolbarButton(HWND toolbar, int command, bool enabled);
 bool ToolbarNotify(NMHDR* header, LRESULT* result);
 
-} // namespace win32ui
+}

@@ -8,7 +8,6 @@
 namespace win32ui
 {
 
-// after a theme or DPI change
 void RefreshSplitter(HWND splitter);
 
-} // namespace win32ui
+}

@@ -10,4 +10,4 @@ namespace win32ui
 
 TextRole GetTextRole(HWND label);
 
-} // namespace win32ui
+}

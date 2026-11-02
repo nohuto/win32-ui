@@ -3,8 +3,6 @@
 
 #pragma once
 
-// dialog spacing in DIPs
-
 namespace win32ui::metrics
 {
 
@@ -22,4 +20,4 @@ inline constexpr int kButtonMinWidth = 70;
 inline constexpr int kButtonHeight = 22;
 inline constexpr int kButtonGap = 10;
 
-} // namespace win32ui::metrics
+}

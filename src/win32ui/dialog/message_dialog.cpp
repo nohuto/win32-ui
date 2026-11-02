@@ -6,8 +6,12 @@
 #include "win32ui/dialog/dialog_layout.h"
 #include "win32ui/dialog/dialog_layout_internal.h"
 #include "win32ui/dialog/dialog_window.h"
+#include "win32ui/dialog/tooltip.h"
 #include "win32ui/gdi/icon_loader_internal.h"
 #include "win32ui/handle_owner.h"
+#include "win32ui/system/strings.h"
+#include "win32ui/text/text.h"
+#include "win32ui/window_metrics.h"
 
 #include <commctrl.h>
 #include <shellapi.h>
@@ -33,42 +37,13 @@ struct IconCloser
     }
 };
 
-std::wstring EditLineBreaks(std::wstring_view text)
+std::wstring_view TrimTrailingBreaks(std::wstring_view text)
 {
     while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n'))
     {
         text.remove_suffix(1);
     }
-    std::wstring result;
-    result.reserve(text.size());
-    for (wchar_t ch : text)
-    {
-        if (ch == L'\r')
-        {
-            continue;
-        }
-        if (ch == L'\n')
-        {
-            result.push_back(L'\r');
-        }
-        result.push_back(ch);
-    }
-    return result;
-}
-
-int TextHeight(HWND window, HFONT font, const std::wstring& text, int width, UINT format)
-{
-    HDC dc = GetDC(window);
-    if (!dc)
-    {
-        return 0;
-    }
-    HGDIOBJ old = SelectObject(dc, font);
-    RECT rect = {0, 0, std::max(1, width), 0};
-    DrawTextW(dc, text.c_str(), static_cast<int>(text.size()), &rect, DT_CALCRECT | DT_NOPREFIX | format);
-    SelectObject(dc, old);
-    ReleaseDC(window, dc);
-    return rect.bottom;
+    return text;
 }
 
 void SetClientWidth(HWND dialog, int width, UINT dpi)
@@ -84,7 +59,7 @@ class MessageDialog final : public DialogWindow
 {
   public:
     explicit MessageDialog(const MessageSpec& spec)
-        : spec_(spec), details_(EditLineBreaks(spec.details)), multiline_(details_.find(L'\n') != std::wstring::npos)
+        : spec_(spec), details_(EditLineBreaks(TrimTrailingBreaks(spec.details))), multiline_(spec.wrap_details || details_.find(L'\n') != std::wstring::npos)
     {
     }
 
@@ -96,7 +71,14 @@ class MessageDialog final : public DialogWindow
         {
             SetWindowLongPtrW(hwnd(), GWL_STYLE, GetWindowLongPtrW(hwnd(), GWL_STYLE) | WS_THICKFRAME);
         }
-        SetClientWidth(hwnd(), Px(spec_.width_dip), dpi());
+        client_width_ = Px(spec_.width_dip);
+        if (spec_.outer_width_dip > 0)
+        {
+            RECT frame = {};
+            AdjustWindowRectForDpi(&frame, static_cast<DWORD>(GetWindowLongPtrW(hwnd(), GWL_STYLE)), static_cast<DWORD>(GetWindowLongPtrW(hwnd(), GWL_EXSTYLE)), dpi());
+            client_width_ = Px(spec_.outer_width_dip) - (frame.right - frame.left);
+        }
+        SetClientWidth(hwnd(), client_width_, dpi());
         if (spec_.icon)
         {
             icon_.reset(LoadSystemIcon(spec_.icon, kIconSize, dpi()));
@@ -113,7 +95,7 @@ class MessageDialog final : public DialogWindow
             {
                 style |= ES_MULTILINE | ES_AUTOVSCROLL;
                 // wrap at opening width, wider windows need fewer lines
-                if (DetailLines(Px(spec_.width_dip) - TextLeft() - Px(metrics::kDialogContentMargin)) > kMaxDetailLines)
+                if (DetailLines(client_width_ - TextLeft() - Px(metrics::kDialogContentMargin)) > kMaxDetailLines)
                 {
                     style |= WS_VSCROLL;
                 }
@@ -129,7 +111,11 @@ class MessageDialog final : public DialogWindow
             SetWindowPos(details_box_, message_, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             if (!multiline_)
             {
-                AddTooltip();
+                tooltip_ = win32ui::AddTooltip(hwnd(), details_box_, details_.c_str());
+                if (tooltip_ && theme() && theme()->apply)
+                {
+                    theme()->apply(tooltip_);
+                }
             }
             if (!spec_.copy_text.empty())
             {
@@ -159,7 +145,6 @@ class MessageDialog final : public DialogWindow
         const int button_gap = Px(kButtonGap);
         const int bottom_margin = Px(kDialogButtonBottomMargin);
 
-        // fit buttons before positioning controls
         std::vector<int> widths;
         int buttons_width = 0;
         for (size_t index = 0; index < buttons_.size(); ++index)
@@ -244,7 +229,6 @@ class MessageDialog final : public DialogWindow
         return Px(metrics::kDialogContentMargin) + (spec_.icon ? Px(kIconSize) + Px(metrics::kBlockGap) : 0);
     }
 
-    // measure wrapped details at width, capped at kMaxDetailLines
     // more line breaks cannot change the count, long lines reach the cap through wrapping
     int DetailLines(int width) const
     {
@@ -255,35 +239,14 @@ class MessageDialog final : public DialogWindow
             breaks += details_[end] == L'\n' ? 1 : 0;
         }
         const int line = std::max(1, fonts().line_height());
-        const int text = TextHeight(hwnd(), fonts().ui(), details_.substr(0, end), width - Px(kBoxTextInset), DT_WORDBREAK | DT_EDITCONTROL | DT_EXPANDTABS);
+        const int text = TextHeight(hwnd(), fonts().ui(), std::wstring_view(details_).substr(0, end), width - Px(kBoxTextInset), DT_WORDBREAK | DT_EDITCONTROL | DT_EXPANDTABS);
         return std::max(1, (text + line - 1) / line);
-    }
-
-    // full text for a truncated single line box
-    void AddTooltip()
-    {
-        tooltip_ = CreateTooltip(hwnd());
-        if (!tooltip_)
-        {
-            return;
-        }
-        TOOLINFOW info = {};
-        info.cbSize = sizeof(info);
-        info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
-        info.hwnd = hwnd();
-        info.uId = reinterpret_cast<UINT_PTR>(details_box_);
-        info.lpszText = details_.data();
-        SendMessageW(tooltip_, TTM_ADDTOOL, 0, reinterpret_cast<LPARAM>(&info));
-        SendMessageW(tooltip_, TTM_SETMAXTIPWIDTH, 0, Px(600));
-        if (theme() && theme()->apply)
-        {
-            theme()->apply(tooltip_);
-        }
     }
 
     MessageSpec spec_;
     std::wstring details_;
     bool multiline_ = false;
+    int client_width_ = 0;
     bool sized_ = false;
     UniqueNullable<HICON, IconCloser> icon_;
     HWND icon_control_ = nullptr;
@@ -313,7 +276,7 @@ class AboutDialog final : public DialogWindow
             rows_.push_back(CreateControl(hwnd(), link ? WC_LINK : WC_STATICW, row.c_str(), link ? WS_TABSTOP : SS_LEFT | SS_NOPREFIX, kAboutFirstRowId + static_cast<int>(rows_.size())));
         }
         ok_ = GetDlgItem(hwnd(), IDOK);
-        SetWindowTextW(ok_, spec_.ok_text.c_str());
+        SetWindowTextW(ok_, spec_.ok_text.empty() ? Text(L"OK") : spec_.ok_text.c_str());
         SetWindowPos(ok_, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
@@ -367,7 +330,7 @@ class AboutDialog final : public DialogWindow
     HWND ok_ = nullptr;
 };
 
-} // namespace
+}
 
 INT_PTR ShowMessage(HWND owner, const MessageSpec& spec)
 {
@@ -381,30 +344,46 @@ void ShowAbout(HWND owner, const AboutSpec& spec)
     dialog.RunModal(owner, L"WIN32UI_ABOUT");
 }
 
+void SplitMessageText(std::wstring_view text, std::wstring* message, std::wstring* details)
+{
+    const size_t split = text.find(L'\n');
+    std::wstring_view first = text.substr(0, split);
+    if (!first.empty() && first.back() == L'\r')
+    {
+        first.remove_suffix(1);
+    }
+    const size_t rest = split == std::wstring_view::npos ? std::wstring_view::npos : text.find_first_not_of(L"\r\n", split);
+    message->assign(first);
+    details->assign(rest == std::wstring_view::npos ? std::wstring_view() : text.substr(rest));
+}
+
 bool CopyTextToClipboard(HWND owner, std::wstring_view text)
 {
-    if (!OpenClipboard(owner))
+    // clipboard is emptied only once the copy exists, a failed allocation keeps what was there
+    const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t));
+    void* locked = memory ? GlobalLock(memory) : nullptr;
+    if (!locked)
     {
-        return false;
-    }
-    bool ok = false;
-    EmptyClipboard();
-    if (HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, (text.size() + 1) * sizeof(wchar_t)))
-    {
-        if (void* locked = GlobalLock(memory))
-        {
-            std::memcpy(locked, text.data(), text.size() * sizeof(wchar_t));
-            static_cast<wchar_t*>(locked)[text.size()] = L'\0';
-            GlobalUnlock(memory);
-            ok = SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
-        }
-        if (!ok)
+        if (memory)
         {
             GlobalFree(memory);
         }
+        return false;
     }
-    CloseClipboard();
+    std::memcpy(locked, text.data(), text.size() * sizeof(wchar_t));
+    static_cast<wchar_t*>(locked)[text.size()] = L'\0';
+    GlobalUnlock(memory);
+    bool ok = false;
+    if (OpenClipboard(owner))
+    {
+        ok = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+        CloseClipboard();
+    }
+    if (!ok)
+    {
+        GlobalFree(memory);
+    }
     return ok;
 }
 
-} // namespace win32ui
+}

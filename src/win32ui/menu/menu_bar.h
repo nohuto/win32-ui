@@ -13,7 +13,6 @@
 namespace win32ui
 {
 
-// owner drawn top level menu items in theme colors, native popups follow dark mode
 class MenuBar
 {
   public:
@@ -25,7 +24,6 @@ class MenuBar
     // replaces and destroys the previous menu, window owns bar
     void Attach(HWND window, HMENU bar);
     void ApplyTheme();
-    // handles WM_MEASUREITEM and WM_DRAWITEM
     bool Measure(MEASUREITEMSTRUCT* info) const;
     bool Draw(const DRAWITEMSTRUCT* info) const;
     // call after DefWindowProc handles WM_NCPAINT or WM_NCACTIVATE to cover the light line under the bar
@@ -41,4 +39,4 @@ class MenuBar
     std::vector<std::unique_ptr<Item>> items_;
 };
 
-} // namespace win32ui
+}

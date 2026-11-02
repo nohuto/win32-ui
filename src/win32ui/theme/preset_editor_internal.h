@@ -20,4 +20,4 @@ inline constexpr int kPresetTemplateId = 2111;
 inline constexpr int kPresetApplyTemplateId = 2112;
 inline constexpr int kPresetApplyId = 2113;
 
-} // namespace win32ui
+}

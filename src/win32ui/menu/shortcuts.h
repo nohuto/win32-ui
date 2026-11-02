@@ -10,17 +10,14 @@
 namespace win32ui
 {
 
-// shared list for accelerators and shortcut text in menus and toolbar tips
 struct Shortcut
 {
     int command;
     BYTE modifiers; // FCONTROL, FSHIFT, FALT
     WORD key;
-    // null for a key that shows nowhere
     const wchar_t* text;
 };
 
-// text of the first named shortcut for a command
 const wchar_t* ShortcutText(std::span<const Shortcut> shortcuts, int command);
 
 class ShortcutTable
@@ -41,7 +38,6 @@ class ShortcutTable
     HACCEL accelerators_ = nullptr;
 };
 
-// translates key messages for main or its children
 bool TranslateShortcuts(HWND main, const ShortcutTable& table, MSG* message, bool (*keep)(const MSG& message));
 
-} // namespace win32ui
+}

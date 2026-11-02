@@ -24,7 +24,6 @@ struct MessageButton
 {
     int id = IDOK;
     std::wstring text;
-    // wider when the text needs it
     int min_width_dip = metrics::kButtonMinWidth;
 };
 
@@ -39,10 +38,12 @@ struct MessageSpec
     PCWSTR icon = nullptr;
     std::wstring copy_text;
     int width_dip = 460;
+    int outer_width_dip = 0;
+    bool wrap_details = false;
 };
 
-// returns pressed button id, or cancel_id for Escape or close
 INT_PTR ShowMessage(HWND owner, const MessageSpec& spec);
+void SplitMessageText(std::wstring_view text, std::wstring* message, std::wstring* details);
 
 struct AboutSpec
 {
@@ -53,6 +54,7 @@ struct AboutSpec
 
 void ShowAbout(HWND owner, const AboutSpec& spec);
 
+// CF_UNICODETEXT readers stop at an embedded NUL
 bool CopyTextToClipboard(HWND owner, std::wstring_view text);
 
-} // namespace win32ui
+}

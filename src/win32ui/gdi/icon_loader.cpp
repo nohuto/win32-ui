@@ -20,7 +20,7 @@ HICON LoadScaledDown(HINSTANCE instance, PCWSTR name, int size)
     return load && SUCCEEDED(load(instance, name, size, size, &icon)) ? icon : nullptr;
 }
 
-} // namespace
+}
 
 int ScaleForDpi(int size, UINT dpi)
 {
@@ -112,4 +112,4 @@ void ImageListAddOrBlank(HIMAGELIST list, HICON icon, int size)
     }
 }
 
-} // namespace win32ui
+}

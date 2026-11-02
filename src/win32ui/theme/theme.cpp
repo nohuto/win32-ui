@@ -6,15 +6,19 @@
 #include "win32ui/dialog/dialog_layout_internal.h"
 #include "win32ui/dialog/dialog_window.h"
 #include "win32ui/dialog/dialog_window_internal.h"
+#include "win32ui/dialog/edit.h"
 #include "win32ui/gdi/buffered_paint.h"
+#include "win32ui/gdi/fonts.h"
 #include "win32ui/gdi/gdi_cache.h"
 #include "win32ui/list_view/list_view.h"
 #include "win32ui/splitter/splitter_internal.h"
 #include "win32ui/status_bar/status_bar.h"
 #include "win32ui/tab_strip/tab_strip.h"
+#include "win32ui/text/text.h"
 #include "win32ui/toolbar/toolbar.h"
 #include "win32ui/theme/palette_internal.h"
 #include "win32ui/theme/theme_internal.h"
+#include "win32ui/window.h"
 #include "win32ui/window_metrics.h"
 
 #include <dwmapi.h>
@@ -22,10 +26,12 @@
 #include <vssym32.h>
 
 #include <algorithm>
+#include <array>
 #include <cwchar>
 #include <iterator>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace win32ui
 {
@@ -58,7 +64,6 @@ void SetCaptionDark(HWND window, bool dark)
     }
 }
 
-// visual style class for the current theme
 void ThemeClass(HWND window, const wchar_t* dark_class = L"DarkMode_Explorer", const wchar_t* light_class = L"Explorer")
 {
     if (!window)
@@ -445,9 +450,8 @@ LRESULT CALLBACK GroupBoxProc(HWND group, UINT message, WPARAM wparam, LPARAM lp
             // group frame shows through controls, repaint the parent area
             const LRESULT result = DefSubclassProc(group, message, wparam, lparam);
             RECT rect = {};
-            if (HWND parent = GetParent(group); parent && GetWindowRect(group, &rect))
+            if (HWND parent = GetParent(group); ChildRect(parent, group, &rect))
             {
-                MapWindowPoints(nullptr, parent, reinterpret_cast<POINT*>(&rect), 2);
                 RedrawWindow(parent, &rect, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
             }
             return result;
@@ -494,21 +498,13 @@ LRESULT CALLBACK TreeProc(HWND tree, UINT message, WPARAM wparam, LPARAM lparam,
     return DefSubclassProc(tree, message, wparam, lparam);
 }
 
-void Subclass(HWND window, SUBCLASSPROC proc, UINT_PTR id)
-{
-    if (!GetWindowSubclass(window, proc, id, nullptr))
-    {
-        SetWindowSubclass(window, proc, id, 0);
-    }
-}
-
 void ApplyControl(HWND window)
 {
     wchar_t name[64] = {};
     GetClassNameW(window, name, static_cast<int>(std::size(name)));
     const ThemeColors& colors = CurrentThemeColors();
-    // theme every window so plain scroll bars follow too
-    // list headers keep the items view theme because it adds the sort arrow
+    // theme every window so plain scroll bars follow too, list headers keep the items view theme because it adds the
+    // sort arrow
     if (_wcsicmp(name, WC_HEADERW) == 0)
     {
         ThemeClass(window, L"DarkMode_ItemsView", L"ItemsView");
@@ -555,11 +551,11 @@ void ApplyControl(HWND window)
         TreeView_SetBkColor(window, colors.panel);
         TreeView_SetTextColor(window, colors.text);
         TreeView_SetLineColor(window, colors.border);
-        Subclass(window, TreeProc, kTreeSubclassId);
+        EnsureSubclass(window, TreeProc, kTreeSubclassId);
     }
     else if (_wcsicmp(name, WC_BUTTONW) == 0 && (GetWindowLongPtrW(window, GWL_STYLE) & BS_TYPEMASK) == BS_GROUPBOX)
     {
-        Subclass(window, GroupBoxProc, kGroupBoxSubclassId);
+        EnsureSubclass(window, GroupBoxProc, kGroupBoxSubclassId);
     }
     else if (_wcsicmp(name, TOOLBARCLASSNAMEW) == 0)
     {
@@ -601,7 +597,7 @@ LPCWSTR RoleProperty()
     return atom;
 }
 
-} // namespace
+}
 
 void ApplyThemeToWindow(HWND window)
 {
@@ -665,6 +661,23 @@ void ReapplyTheme(HWND top_level)
     ReapplyThemeToDialogs();
     RedrawWindow(top_level, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
     reapplying = false;
+}
+
+void ReapplyFonts(HWND root, HFONT font)
+{
+    SetFontTree(root, font);
+    if (root)
+    {
+        RefreshLibraryControl(root);
+        EnumChildWindows(
+            root,
+            [](HWND child, LPARAM) -> BOOL {
+                RefreshLibraryControl(child);
+                return TRUE;
+            },
+            0
+        );
+    }
 }
 
 HBRUSH ThemeControlColor(UINT message, HDC hdc, HWND control)
@@ -766,13 +779,97 @@ TextRole GetTextRole(HWND label)
     return value ? static_cast<TextRole>(value - 1) : TextRole::normal;
 }
 
-DialogTheme ThemeDialogHooks()
+namespace
 {
-    DialogTheme hooks;
-    hooks.apply = ApplyThemeToWindow;
-    hooks.control_color = ThemeControlColor;
-    hooks.custom_draw = ThemeCustomDraw;
-    return hooks;
+
+void ApplyDialogTheme(HWND dialog)
+{
+    ApplyThemeToWindow(dialog);
+    AddSelectAllShortcut(dialog);
 }
 
-} // namespace win32ui
+template <unsigned Flags>
+void PrepareDialog(HWND dialog)
+{
+    if constexpr ((Flags & kPrepareTranslate) != 0)
+    {
+        TranslateWindowTexts(dialog);
+    }
+    if constexpr ((Flags & (kPrepareNoTextLimit | kPrepareSingleLine)) != 0)
+    {
+        for (HWND child = GetWindow(dialog, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
+        {
+            if (ClassIs(child, WC_COMBOBOXW))
+            {
+                if constexpr ((Flags & kPrepareNoTextLimit) != 0)
+                {
+                    SendMessageW(child, CB_LIMITTEXT, 0, 0);
+                }
+            }
+            else if (ClassIs(child, WC_EDITW))
+            {
+                if constexpr ((Flags & kPrepareNoTextLimit) != 0)
+                {
+                    SendMessageW(child, EM_SETLIMITTEXT, 0, 0);
+                }
+                if constexpr ((Flags & kPrepareSingleLine) != 0)
+                {
+                    const LONG_PTR style = GetWindowLongPtrW(child, GWL_STYLE);
+                    if ((style & ES_MULTILINE) && !(style & ES_READONLY))
+                    {
+                        KeepSingleLine(child);
+                    }
+                }
+            }
+        }
+    }
+}
+
+template <unsigned... Flags>
+constexpr std::array<DialogTheme, sizeof...(Flags)> MakeDialogHooks(std::integer_sequence<unsigned, Flags...>)
+{
+    return {DialogTheme{ApplyDialogTheme, ThemeControlColor, ThemeCustomDraw, Flags ? &PrepareDialog<Flags> : nullptr}...};
+}
+
+constexpr auto kDialogHooks = MakeDialogHooks(std::make_integer_sequence<unsigned, 8>());
+
+}
+
+const DialogTheme* ThemeDialogHooks(unsigned prepare)
+{
+    return &kDialogHooks[prepare & (kDialogHooks.size() - 1)];
+}
+
+ListViewHooks DialogListHooks(bool (*row_menu)(void* context, HWND list, int row, POINT screen))
+{
+    return {.frame = ThemeDialogHooks(), .row_menu = row_menu};
+}
+
+bool SetupDialogList(HWND list, const ListViewHooks* hooks, DWORD extra_styles, std::vector<ListColumn> columns)
+{
+    static const ListViewHooks defaults = DialogListHooks();
+    if (!list)
+    {
+        return false;
+    }
+    // state images follow the theme of the list when check boxes are enabled
+    ApplyThemeToWindow(list);
+    if (!AttachDialogListView(list, hooks ? hooks : &defaults, extra_styles))
+    {
+        return false;
+    }
+    if (!columns.empty())
+    {
+        const UINT dpi = WindowDpi(list);
+        for (ListColumn& column : columns)
+        {
+            column.width_dip = std::max(column.width_dip, Unscale(ListView_GetStringWidth(list, column.title.c_str()), dpi) + 16);
+            column.default_width_dip = column.width_dip;
+        }
+        SetListColumns(list, columns);
+    }
+    ShowListGridButton(list);
+    return true;
+}
+
+}

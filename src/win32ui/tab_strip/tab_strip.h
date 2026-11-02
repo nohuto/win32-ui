@@ -17,7 +17,6 @@ struct TabStripHooks
     const DialogTheme* frame = nullptr;
     bool (*closable)(void* context, int index) = nullptr;
     void (*close)(void* context, int index) = nullptr;
-    const wchar_t* close_name = nullptr;
     void* context = nullptr;
 };
 
@@ -30,4 +29,4 @@ int TabStripRowHeight(HWND strip);
 int FitTabStrip(HWND strip, int width, int max_height);
 void DrawCloseGlyph(HDC hdc, const RECT& rect, COLORREF color, UINT dpi);
 
-} // namespace win32ui
+}

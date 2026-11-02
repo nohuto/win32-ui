@@ -1,0 +1,15 @@
+// Copyright (C) 2026 nohuto
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+#pragma once
+
+#include <windows.h>
+
+namespace win32ui
+{
+
+// text copied
+HWND AddTooltip(HWND owner, HWND control, const wchar_t* text);
+bool PlaceTipNearCursor(HWND tip, UINT dpi);
+
+}

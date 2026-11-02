@@ -3,8 +3,8 @@
 
 #include "win32ui/gdi/fonts.h"
 
-#include "win32ui/gdi/fonts_internal.h"
 #include "win32ui/system_api.h"
+#include "win32ui/window_metrics.h"
 
 #include <algorithm>
 #include <cwchar>
@@ -56,7 +56,7 @@ LOGFONTW NonClientFont(UINT dpi, LOGFONTW NONCLIENTMETRICSW::* member)
     return font;
 }
 
-} // namespace
+}
 
 void SetCustomFont(const LOGFONTW* font)
 {
@@ -160,10 +160,53 @@ int FontSet::TextWidth(const wchar_t* text) const
     return size.cx;
 }
 
-TEXTMETRICW WindowFontMetrics(HWND window)
+UniqueFont CreateMonoFont(HFONT size_from, UINT dpi)
+{
+    LOGFONTW size = {};
+    const int height = size_from && GetObjectW(size_from, sizeof(size), &size) ? size.lfHeight : FontHeight(9, dpi);
+    return UniqueFont(CreateFontW(height, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, FF_MODERN, L"Consolas"));
+}
+
+bool SetMonoFont(HWND dialog, std::initializer_list<int> controls, HFONT size_from, UniqueFont* font)
+{
+    UniqueFont mono = CreateMonoFont(size_from ? size_from : reinterpret_cast<HFONT>(SendMessageW(dialog, WM_GETFONT, 0, 0)), DpiForWindow(dialog));
+    if (!mono)
+    {
+        return false;
+    }
+    for (const int id : controls)
+    {
+        SendDlgItemMessageW(dialog, id, WM_SETFONT, reinterpret_cast<WPARAM>(mono.get()), TRUE);
+    }
+    *font = std::move(mono);
+    return true;
+}
+
+TEXTMETRICW FontMetrics(HFONT font)
 {
     TEXTMETRICW metrics = {};
-    HDC dc = GetDC(window);
+    if (const HDC dc = GetDC(nullptr))
+    {
+        const HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
+        GetTextMetricsW(dc, &metrics);
+        if (old)
+        {
+            SelectObject(dc, old);
+        }
+        ReleaseDC(nullptr, dc);
+    }
+    return metrics;
+}
+
+TEXTMETRICW WindowFontMetrics(HWND window)
+{
+    // GetDC(nullptr) would measure the screen font
+    TEXTMETRICW metrics = {};
+    const HDC dc = window ? GetDC(window) : nullptr;
+    if (!dc)
+    {
+        return metrics;
+    }
     const HFONT font = reinterpret_cast<HFONT>(SendMessageW(window, WM_GETFONT, 0, 0));
     const HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
     GetTextMetricsW(dc, &metrics);
@@ -175,4 +218,21 @@ TEXTMETRICW WindowFontMetrics(HWND window)
     return metrics;
 }
 
-} // namespace win32ui
+void SetFontTree(HWND root, HFONT font)
+{
+    if (!root)
+    {
+        return;
+    }
+    SendMessageW(root, WM_SETFONT, reinterpret_cast<WPARAM>(font), FALSE);
+    EnumChildWindows(
+        root,
+        [](HWND child, LPARAM parameter) -> BOOL {
+            SendMessageW(child, WM_SETFONT, static_cast<WPARAM>(parameter), FALSE);
+            return TRUE;
+        },
+        reinterpret_cast<LPARAM>(font)
+    );
+}
+
+}
