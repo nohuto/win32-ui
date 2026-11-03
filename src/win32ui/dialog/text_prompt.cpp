@@ -178,9 +178,9 @@ DWORD PromptText(HWND owner, const TextPrompt& prompt, std::wstring* text)
         return ERROR_INVALID_PARAMETER;
     }
     TextPromptDialog dialog(prompt, *text);
-    if (dialog.RunModal(owner, L"WIN32UI_TEXT_PROMPT") != IDOK)
+    if (const INT_PTR result = dialog.RunModal(owner, L"WIN32UI_TEXT_PROMPT"); result != IDOK)
     {
-        return ERROR_CANCELLED;
+        return result == -1 && GetLastError() ? GetLastError() : ERROR_CANCELLED;
     }
     *text = std::move(dialog.text());
     return 0;

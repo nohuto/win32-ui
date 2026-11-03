@@ -61,26 +61,22 @@ std::optional<std::wstring> Formatted(const Format& format)
     return text;
 }
 
-// daylight saving dates changed over the years in many zones, with dynamic daylight time disabled the fixed rules of
-// the zone apply to every year
+// zones changed their DST dates over the years, without dynamic DST the fixed rules apply to all
 bool DynamicZone(DYNAMIC_TIME_ZONE_INFORMATION* zone) noexcept
 {
     return GetDynamicTimeZoneInformation(zone) != TIME_ZONE_ID_INVALID && !zone->DynamicDaylightTimeDisabled;
 }
 
-// SystemTimeToTzSpecificLocalTimeEx costs about 5 us for a date of another year than the last one (registry reads), a
-// list of 20000 keys spread over the years took 114 ms instead of 1 ms with FileTimeToLocalFileTime, so each UTC year
-// keeps the ticks where its offset changes, found with the same function, and a date only looks them up
+// each UTC year caches the ticks of its offset changes, a conversion in another year reads the registry (5 us)
 constexpr ULONGLONG kTicksPerMs = 10'000;
 constexpr ULONGLONG kTicksPerDay = 86'400'000 * kTicksPerMs;
-// near New Year the function can apply the rules of the other year, those days are converted one by one
+// near New Year the rules of the other year can apply, those days convert one by one
 constexpr ULONGLONG kYearMargin = 2 * kTicksPerDay;
-// years whose two changes lie a month or more apart (see ChangesFarApart), so weekly samples see every change
+// only years whose changes lie a month apart, weekly samples then see each one
 constexpr ULONGLONG kSampleStep = 7 * kTicksPerDay;
 constexpr size_t kMaxChanges = 8;
 constexpr size_t kCachedYears = 32;
-// reading the zone costs more than a cached conversion, so a series of dates reads it once a second, a single date
-// reads it again, the zone may have changed since the last one (a dialog showing a date it converts back later)
+// a series of dates reads the zone once a second, a single date reads it again, it may have changed
 constexpr LONGLONG kSeriesGapPerSecond = 500;
 
 struct YearOffsets
@@ -132,7 +128,7 @@ bool ProbeOffset(const DYNAMIC_TIME_ZONE_INFORMATION& zone, ULONGLONG tick, LONG
     return true;
 }
 
-// valid rules can put both daylight saving changes into one week, then samples could miss the period between them
+// valid rules can put both DST changes into one week, weekly samples would miss them
 bool ChangesFarApart(const DYNAMIC_TIME_ZONE_INFORMATION& zone, WORD year) noexcept
 {
     // Vista SP1 and later, the headers declare it from Windows 7 on
@@ -152,7 +148,7 @@ bool ChangesFarApart(const DYNAMIC_TIME_ZONE_INFORMATION& zone, WORD year) noexc
     return months >= 2 && months <= 10;
 }
 
-// count stays 0 when a sample fails, the changes may lie close together or the year changes more often than fits
+// count stays 0 when a sample fails or the changes dont fit
 void FillYear(const DYNAMIC_TIME_ZONE_INFORMATION& zone, WORD utc_year, YearOffsets* year) noexcept
 {
     year->count = 0;
@@ -320,7 +316,7 @@ std::wstring DateTimePattern()
     return LocaleText(LOCALE_SSHORTDATE) + L' ' + TimePattern(false);
 }
 
-// both Windows 7 and later, they pick the rules of the year by the local time (the UTC year is wrong near New Year)
+// Windows 7 and later pick the year rules by local time, the UTC year is wrong near New Year
 bool ZoneTimeToLocal(const DYNAMIC_TIME_ZONE_INFORMATION& zone, const SYSTEMTIME& utc, SYSTEMTIME* local) noexcept
 {
     static const auto to_local = ImportProc<ZoneConvertFn>(L"kernel32.dll", "SystemTimeToTzSpecificLocalTimeEx");

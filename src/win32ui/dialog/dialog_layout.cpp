@@ -106,7 +106,8 @@ struct Fit
     int line = 0;
 };
 
-std::unordered_map<HWND, Fit> fits;
+// per UI thread, a control is only measured on its own thread
+thread_local std::unordered_map<HWND, Fit> fits;
 
 bool SameClass(const wchar_t* class_name, const wchar_t* expected)
 {
@@ -366,8 +367,7 @@ void FitDialogText(HWND dialog)
         int short_by = 0;
     };
     std::vector<Control> controls;
-    // group box over an earlier one of the same size takes that ones final rectangle, laid out on its own each of the
-    // two would be the others container
+    // a group box over an equal earlier one takes its final rect, alone each would contain the other
     std::vector<std::pair<HWND, size_t>> overlays;
     for (HWND child = GetWindow(dialog, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT))
     {
@@ -765,13 +765,16 @@ void CollapseSection(HWND dialog, int control_id)
         }
     };
     RECT control = {};
-    GetWindowRect(GetDlgItem(dialog, control_id), &control);
+    if (!GetWindowRect(GetDlgItem(dialog, control_id), &control))
+    {
+        return;
+    }
     RECT band = control;
     bool grouped = false;
     for_each_child([&](HWND child, const RECT& rect) {
         wchar_t class_name[16] = {};
         GetClassNameW(child, class_name, static_cast<int>(std::size(class_name)));
-        if (_wcsicmp(class_name, WC_BUTTONW) == 0 && (GetWindowLongPtrW(child, GWL_STYLE) & BS_TYPEMASK) == BS_GROUPBOX && rect.top <= control.top && rect.bottom >= control.bottom)
+        if (SameClass(class_name, WC_BUTTONW) && (GetWindowLongPtrW(child, GWL_STYLE) & BS_TYPEMASK) == BS_GROUPBOX && rect.top <= control.top && rect.bottom >= control.bottom)
         {
             band = rect;
             grouped = true;

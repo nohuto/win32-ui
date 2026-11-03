@@ -4,9 +4,9 @@
 #include "win32ui/tree_view/tree_view.h"
 
 #include "win32ui/system/strings.h"
+#include "win32ui/typed_text_internal.h"
 
 #include <cwchar>
-#include <cwctype>
 #include <initializer_list>
 #include <memory>
 #include <utility>
@@ -21,7 +21,6 @@ namespace
 {
 
 constexpr UINT_PTR kTreeSubclassId = 1;
-constexpr DWORD kTypeTimeoutMs = 1000;
 constexpr size_t kMaxItemText = size_t{1} << 16;
 
 struct TreeState
@@ -29,8 +28,7 @@ struct TreeState
     const TreeViewHooks* hooks = nullptr;
     // class procedure, reads skip the subclass layers (about 0.7 us each per item)
     WNDPROC native = nullptr;
-    std::wstring typed;
-    DWORD typed_at = 0;
+    TypedText typed;
     // Right expanded it, its children come first while it stays selected
     HTREEITEM descend = nullptr;
     // character numpad + - * produce isnt search text
@@ -119,11 +117,6 @@ std::wstring_view ReadText(HWND tree, WNDPROC native, HTREEITEM item, std::vecto
     }
 }
 
-bool TypedTextAlive(const TreeState* state)
-{
-    return !state->typed.empty() && GetTickCount() - state->typed_at <= kTypeTimeoutMs;
-}
-
 bool LoadChildren(HWND tree, TreeState* state, HTREEITEM item)
 {
     if (!state->hooks || !state->hooks->load_children)
@@ -144,11 +137,11 @@ HTREEITEM Search(HWND tree, TreeState* state, HTREEITEM parent, HTREEITEM start)
     const auto visit = [&](HTREEITEM item) {
         side = item == start ? 0 : side;
         const std::wstring_view text = ReadText(tree, state->native, item, &state->text);
-        if (!StartsWithInsensitive(text, state->typed))
+        if (!StartsWithInsensitive(text, state->typed.text))
         {
             return false;
         }
-        HTREEITEM* found = text.size() == state->typed.size() ? exact : prefix;
+        HTREEITEM* found = text.size() == state->typed.text.size() ? exact : prefix;
         found[side] = found[side] ? found[side] : item;
         // nothing comes before an exact match from start on
         return found == exact && side == 0;
@@ -194,28 +187,11 @@ bool TypeToSelect(HWND tree, TreeState* state, wchar_t character)
     {
         return true;
     }
-    if (character != L'\b' && (!std::iswprint(character) || character == L'\t'))
+    if (!state->typed.Feed(character))
     {
         return false;
     }
-    if (!TypedTextAlive(state))
-    {
-        state->typed.clear();
-    }
-    if (character == L' ' && state->typed.empty())
-    {
-        return true;
-    }
-    state->typed_at = GetTickCount();
-    if (character != L'\b')
-    {
-        state->typed.push_back(character);
-    }
-    else if (!state->typed.empty())
-    {
-        state->typed.pop_back();
-    }
-    if (state->typed.empty())
+    if (state->typed.text.empty())
     {
         return true;
     }
@@ -261,7 +237,7 @@ LRESULT CALLBACK TreeProc(HWND tree, UINT message, WPARAM wparam, LPARAM lparam,
         // moving starts new typed text, only Right on a collapsed item descends
         if (wparam == VK_RIGHT || wparam == VK_LEFT || wparam == VK_UP || wparam == VK_DOWN || wparam == VK_HOME || wparam == VK_END || wparam == VK_PRIOR || wparam == VK_NEXT)
         {
-            state->typed.clear();
+            state->typed.text.clear();
             const HTREEITEM selected = wparam == VK_RIGHT ? Next(tree, state->native, TVGN_CARET, nullptr) : nullptr;
             const bool collapsed = selected && !(Call(tree, state->native, TVM_GETITEMSTATE, reinterpret_cast<WPARAM>(selected), TVIS_EXPANDED) & TVIS_EXPANDED);
             state->descend = collapsed ? selected : nullptr;
@@ -275,7 +251,7 @@ LRESULT CALLBACK TreeProc(HWND tree, UINT message, WPARAM wparam, LPARAM lparam,
             }
         }
         // space inside typed text, not a check box toggle
-        else if (wparam == VK_SPACE && TypedTextAlive(state) && GetKeyState(VK_CONTROL) >= 0 && GetKeyState(VK_MENU) >= 0)
+        else if (wparam == VK_SPACE && state->typed.Alive() && GetKeyState(VK_CONTROL) >= 0 && GetKeyState(VK_MENU) >= 0)
         {
             return 0;
         }
@@ -326,7 +302,7 @@ bool AttachTreeView(HWND tree, const TreeViewHooks* hooks)
 bool TreeTypeSearchActive(HWND tree)
 {
     const TreeState* state = StateOf(tree);
-    return state && TypedTextAlive(state);
+    return state && state->typed.Alive();
 }
 
 std::wstring TreeItemText(HWND tree, HTREEITEM item)
@@ -394,8 +370,7 @@ HTREEITEM ContextMenuTreeItem(HWND tree, LPARAM screen_point, POINT* screen)
 
 void SetTreeChecksBelow(HWND tree, HTREEITEM item, bool checked)
 {
-    // depth first without recursion, a chain can be deep, a notification handler can destroy the tree, then every query
-    // gives null and ends the walk
+    // no recursion for deep chains, a handler that destroys the tree nulls every query and ends the walk
     for (HTREEITEM current = item ? TreeView_GetChild(tree, item) : nullptr; current;)
     {
         TreeView_SetCheckState(tree, current, checked);

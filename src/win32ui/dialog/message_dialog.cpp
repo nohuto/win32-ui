@@ -9,12 +9,13 @@
 #include "win32ui/dialog/tooltip.h"
 #include "win32ui/gdi/icon_loader_internal.h"
 #include "win32ui/handle_owner.h"
+#include "win32ui/system/error_text.h"
+#include "win32ui/system/shell_open.h"
 #include "win32ui/system/strings.h"
 #include "win32ui/text/text.h"
 #include "win32ui/window_metrics.h"
 
 #include <commctrl.h>
-#include <shellapi.h>
 
 #include <algorithm>
 #include <cstring>
@@ -295,7 +296,14 @@ class AboutDialog final : public DialogWindow
         const auto* link = reinterpret_cast<const NMLINK*>(header);
         if (link->item.szUrl[0] != L'\0')
         {
-            ShellExecuteW(hwnd(), L"open", link->item.szUrl, nullptr, nullptr, SW_SHOWNORMAL);
+            if (const DWORD error = ShellOpen(hwnd(), link->item.szUrl); error != ERROR_SUCCESS && error != ERROR_CANCELLED)
+            {
+                MessageSpec failed;
+                failed.title = Text(L"Error");
+                failed.message = FormatWin32Error(error);
+                failed.icon = IDI_ERROR;
+                ShowMessage(hwnd(), failed);
+            }
             *handled = true;
         }
         return 0;
@@ -335,7 +343,9 @@ class AboutDialog final : public DialogWindow
 INT_PTR ShowMessage(HWND owner, const MessageSpec& spec)
 {
     MessageDialog dialog(spec);
-    return dialog.RunModal(owner, L"WIN32UI_MESSAGE");
+    // a question that cant be shown must not count as yes or no
+    const INT_PTR result = dialog.RunModal(owner, L"WIN32UI_MESSAGE");
+    return result == -1 ? IDCANCEL : result;
 }
 
 void ShowAbout(HWND owner, const AboutSpec& spec)
@@ -364,24 +374,33 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text)
     void* locked = memory ? GlobalLock(memory) : nullptr;
     if (!locked)
     {
+        const DWORD error = GetLastError();
         if (memory)
         {
             GlobalFree(memory);
         }
+        SetLastError(error);
         return false;
     }
     std::memcpy(locked, text.data(), text.size() * sizeof(wchar_t));
     static_cast<wchar_t*>(locked)[text.size()] = L'\0';
     GlobalUnlock(memory);
     bool ok = false;
+    DWORD error = ERROR_SUCCESS;
     if (OpenClipboard(owner))
     {
         ok = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory) != nullptr;
+        error = GetLastError();
         CloseClipboard();
+    }
+    else
+    {
+        error = GetLastError();
     }
     if (!ok)
     {
         GlobalFree(memory);
+        SetLastError(error);
     }
     return ok;
 }

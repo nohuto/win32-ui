@@ -24,7 +24,6 @@ enum class TextRole
 };
 
 void ApplyThemeToWindow(HWND window);
-void SetThemeClass(HWND window, const wchar_t* dark_class);
 void ReapplyTheme(HWND top_level);
 void ReapplyFonts(HWND root, HFONT font);
 HBRUSH ThemeControlColor(UINT message, HDC hdc, HWND control);

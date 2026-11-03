@@ -9,8 +9,9 @@
 #include "win32ui/gdi/fonts.h"
 #include "win32ui/handle_owner.h"
 #include "win32ui/system/strings.h"
-#include "win32ui/theme/theme.h"
+#include "win32ui/theme/theme_internal.h"
 #include "win32ui/window.h"
+#include "win32ui/window_metrics.h"
 
 #include <commctrl.h>
 #include <commdlg.h>
@@ -62,7 +63,7 @@ void UpdateSample(HWND dialog, PickerState* state)
     GetWindowTextW(size_combo, size_text, static_cast<int>(_countof(size_text)));
     if (const int point_size = _wtoi(size_text); point_size > 0)
     {
-        preview.lfHeight = FontHeight(point_size);
+        preview.lfHeight = FontHeight(point_size, DpiForWindow(dialog));
     }
     UniqueFont font(CreateFontIndirectW(&preview));
     if (!font)
@@ -223,6 +224,9 @@ UINT_PTR CALLBACK HookProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
     case kUpdatePreviewMessage:
         UpdateSample(hwnd, state);
         return 0;
+    case 0x02E0: // WM_DPICHANGED, not in the targeted SDK
+        PostMessageW(hwnd, kUpdatePreviewMessage, 0, 0);
+        break;
     case WM_COMMAND:
         if (!lparam)
         {

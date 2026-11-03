@@ -35,7 +35,8 @@ bool CellNumber(std::wstring_view text, double* value)
     {
         return false;
     }
-    // wcstod needs a terminated copy
+    // wcstod needs a terminated copy, of the characters a number can hold only
+    text = text.substr(0, text.find_first_not_of(L"0123456789abcdefABCDEFpPxX+-."));
     wchar_t short_text[64];
     std::wstring long_text;
     const wchar_t* terminated = short_text;

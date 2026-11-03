@@ -10,6 +10,7 @@
 #include <shlobj.h>
 
 #include <algorithm>
+#include <cwctype>
 
 namespace win32ui
 {
@@ -50,9 +51,7 @@ bool IsDeviceName(std::wstring_view name) noexcept
     return (EqualsInsensitive(stem.substr(0, 3), L"COM") || EqualsInsensitive(stem.substr(0, 3), L"LPT")) && ((digit >= L'0' && digit <= L'9') || digit == L'\x00B9' || digit == L'\x00B2' || digit == L'\x00B3');
 }
 
-// "C:\", "C:", "\", "\\server\share", "\\?\C:\", "\\?\Volume{...}\", "\\?\UNC\server\share" (as PathCchRemoveFileSpec),
-// the same for "\\.\" ("\\.\C:" is the volume, not its root folder, PathCchRemoveFileSpec takes "." for a server
-// there), and "\\?\GLOBALROOT\Device\<volume>\", "\\?\GLOBALROOT\Device\Mup\server\share"
+// drive, UNC, \\?\ and \\.\ roots like PathCchRemoveFileSpec, "\\.\C:" is the volume, GLOBALROOT device roots too
 size_t RootLength(std::wstring_view path) noexcept
 {
     const auto is_separator = [&](size_t index) { return IsSeparator(path, index); };
@@ -68,8 +67,7 @@ size_t RootLength(std::wstring_view path) noexcept
         {
             return share_end(8);
         }
-        // "\\?\GLOBALROOT\Device\HarddiskVolume1" is the volume, its root folder ends with the separator, other
-        // GLOBALROOT paths ("\\?\GLOBALROOT\SystemRoot\x") have the plain device root
+        // "\\?\GLOBALROOT\Device\HarddiskVolume1" is the volume, other GLOBALROOT paths have the plain device root
         if (path.size() > 22 && EqualsInsensitive(path.substr(4, 10), L"GLOBALROOT") && is_separator(14) && EqualsInsensitive(path.substr(15, 6), L"Device") &&
             is_separator(21) && !is_separator(22))
         {
@@ -165,14 +163,23 @@ std::wstring JoinPath(std::wstring_view left, std::wstring_view right)
     {
         path.back() = L'\\';
     }
-    // without PATHCCH_ALLOW_LONG_PATHS the result never exceeds MAX_PATH, PathCchCombine drops a \\?\ prefix and
-    // normalizes what Win32 wouldnt ("\\?\C:\a." -> "C:\a.", opened as "C:\a") and takes the "." of \\.\ for a folder
-    // ("\\.\C:\a" -> "\\C:\a")
+    // PathCchCombine caps at MAX_PATH, drops \\?\ and reads the "." of \\.\ as a folder, those paths join below
     static const auto combine = ImportProc<HRESULT(WINAPI*)(PWSTR, size_t, PCWSTR, PCWSTR)>(L"kernelbase.dll", "PathCchCombine");
     wchar_t combined[MAX_PATH];
     if (combine && !IsDevicePath(left) && SUCCEEDED(combine(combined, MAX_PATH, path.c_str(), std::wstring(right).c_str())))
     {
         return combined;
+    }
+    // a rooted right side wins, a leading separator alone keeps the root of left
+    const size_t right_root = RootLength(right);
+    if (right_root > 1 || (right_root == 1 && RootLength(path) == 0))
+    {
+        return std::wstring(right);
+    }
+    if (right_root == 1)
+    {
+        path.resize(RootLength(path));
+        right.remove_prefix(1);
     }
     if (path.back() != L'\\')
     {
@@ -262,6 +269,22 @@ bool IsDirectory(const wchar_t* path) noexcept
     return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 }
 
+bool IsDriveAbsolute(std::wstring_view path) noexcept
+{
+    return path.size() >= 3 && iswalpha(path[0]) && path[1] == L':' && IsSeparator(path, 2);
+}
+
+bool OnFixedDrive(std::wstring_view path) noexcept
+{
+    if (!IsDriveAbsolute(path))
+    {
+        return false;
+    }
+    const wchar_t root[] = {path[0], L':', L'\\', L'\0'};
+    const UINT type = GetDriveTypeW(root);
+    return type == DRIVE_FIXED || type == DRIVE_RAMDISK;
+}
+
 bool IsMissing(const wchar_t* path) noexcept
 {
     if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES)
@@ -300,8 +323,7 @@ std::wstring KnownFolderPath(const GUID& folder, DWORD flags, HANDLE token)
 DWORD ForEachFile(const wchar_t* pattern, bool (*visit)(void* context, const WIN32_FIND_DATAW& data), void* context)
 {
     WIN32_FIND_DATAW data;
-    // no short names returned (patterns still match them) and bigger batches (WinSxS, 13234 entries: 31.6 -> 8.6 ms),
-    // Vista rejects both
+    // no short names and larger batches (WinSxS 31.6 -> 8.6 ms), Vista rejects both flags
     UniqueFind find(FindFirstFileExW(pattern, FindExInfoBasic, &data, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH));
     if (!find && GetLastError() == ERROR_INVALID_PARAMETER)
     {

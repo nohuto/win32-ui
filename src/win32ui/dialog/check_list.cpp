@@ -20,12 +20,14 @@ namespace
 
 constexpr int kSelectAllId = 2401;
 constexpr int kClearAllId = 2402;
+constexpr int kColumns = 3;
+constexpr int kColumnWidthDip = 310;
 
 class CheckListDialog final : public DialogWindow
 {
   public:
     CheckListDialog(const CheckListSpec& spec, std::vector<size_t> checked)
-        : spec_(spec), checked_(std::move(checked)), columns_(std::max(1, spec.columns))
+        : spec_(spec), checked_(std::move(checked))
     {
     }
 
@@ -153,7 +155,7 @@ class CheckListDialog final : public DialogWindow
     {
         const int count = static_cast<int>(checks_.size());
         const int rows = std::max(1, (count + columns - 1) / columns);
-        int width = Px(spec_.column_width_dip);
+        int width = Px(kColumnWidthDip);
         for (int index = column * rows; index < std::min(count, (column + 1) * rows); ++index)
         {
             width = std::max(width, TextFitWidth(checks_[static_cast<size_t>(index)]));
@@ -182,7 +184,7 @@ class CheckListDialog final : public DialogWindow
     HWND clear_all_ = nullptr;
     HWND ok_button_ = nullptr;
     HWND cancel_button_ = nullptr;
-    int columns_ = 1;
+    int columns_ = kColumns;
     int rows_per_column_ = 1;
 };
 
@@ -195,9 +197,9 @@ DWORD PickChecks(HWND owner, const CheckListSpec& spec, std::vector<size_t>* che
         return ERROR_INVALID_PARAMETER;
     }
     CheckListDialog dialog(spec, *checked);
-    if (dialog.RunModal(owner, L"WIN32UI_CHECK_LIST") != IDOK)
+    if (const INT_PTR result = dialog.RunModal(owner, L"WIN32UI_CHECK_LIST"); result != IDOK)
     {
-        return ERROR_CANCELLED;
+        return result == -1 && GetLastError() ? GetLastError() : ERROR_CANCELLED;
     }
     *checked = std::move(dialog.checked());
     return 0;

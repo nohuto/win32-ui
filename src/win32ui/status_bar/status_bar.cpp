@@ -147,7 +147,7 @@ int TextRoom(HWND bar, const RECT& part)
 {
     int borders[3] = {};
     SendMessageW(bar, SB_GETBORDERS, 0, reinterpret_cast<LPARAM>(borders));
-    return static_cast<int>(part.right - part.left) - 2 * (borders[2] + kTextInset);
+    return static_cast<int>(part.right - part.left) - 2 * (borders[2] + Scale(kTextInset, WindowDpi(bar)));
 }
 
 bool GripShown(HWND bar)
@@ -200,7 +200,7 @@ void PlaceProgress(HWND bar, StatusState* state)
     }
     int borders[3] = {};
     SendMessageW(bar, SB_GETBORDERS, 0, reinterpret_cast<LPARAM>(borders));
-    InflateRect(&part, -(borders[2] + kTextInset), -borders[1] - 2);
+    InflateRect(&part, -(borders[2] + Scale(kTextInset, WindowDpi(bar))), -borders[1] - 2);
     SetWindowPos(state->progress, nullptr, part.left, part.top, std::max<int>(0, part.right - part.left), std::max<int>(0, part.bottom - part.top), SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
@@ -287,7 +287,7 @@ void Paint(HWND bar, HDC hdc, const StatusBarColors& colors)
             LineTo(hdc, part.right - 1, part.bottom - 2);
         }
         RECT text = part;
-        InflateRect(&text, -(borders[2] + kTextInset), 0);
+        InflateRect(&text, -(borders[2] + Scale(kTextInset, WindowDpi(bar))), 0);
         const std::wstring content = PartText(bar, index);
         DrawTextW(hdc, content.c_str(), static_cast<int>(content.size()), &text, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_END_ELLIPSIS | DT_NOPREFIX);
     }

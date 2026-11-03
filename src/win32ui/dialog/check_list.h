@@ -17,8 +17,6 @@ struct CheckListSpec
 {
     std::wstring_view title;
     std::span<const std::wstring> labels;
-    int columns = 3;
-    int column_width_dip = 310;
     bool (*accept)(void* context, HWND dialog, const std::vector<size_t>& checked) = nullptr;
     void* context = nullptr;
 };

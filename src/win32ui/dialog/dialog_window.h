@@ -18,7 +18,7 @@ namespace win32ui
 
 bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const DialogTheme* theme, int icon);
 
-// UI thread only, cancel(context) lets CancelOpenDialogs close UI that isnt a DialogWindow and must not pump messages
+// UI thread only, cancel lets CancelOpenDialogs close other UI and must not pump messages
 class ModalScope
 {
   public:
@@ -35,6 +35,7 @@ class DialogWindow
 {
   public:
     virtual ~DialogWindow() = default;
+    // -1 when the window cant be created, GetLastError has the reason
     INT_PTR RunModal(HWND owner, const wchar_t* template_name);
     // owner must pass messages through IsDialogMessage, End destroys modeless window
     bool OpenModeless(HWND owner, const wchar_t* template_name);

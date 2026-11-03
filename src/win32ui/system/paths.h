@@ -28,6 +28,10 @@ std::wstring SafeFileName(std::wstring_view name);
 bool IsFile(const wchar_t* path) noexcept;
 bool IsDirectory(const wchar_t* path) noexcept;
 bool IsMissing(const wchar_t* path) noexcept;
+// "X:\" or "X:/" at the start
+bool IsDriveAbsolute(std::wstring_view path) noexcept;
+// drive absolute on a fixed drive or RAM disk
+bool OnFixedDrive(std::wstring_view path) noexcept;
 DWORD EnsureDirectory(const wchar_t* path);
 std::wstring KnownFolderPath(const GUID& folder, DWORD flags = 0, HANDLE token = nullptr);
 

@@ -6,10 +6,12 @@
 #include "win32ui/system/file_io.h"
 
 #include "win32ui/handle_owner.h"
+#include "win32ui/system/error_text.h"
 #include "win32ui/system/file_io_internal.h"
 #include "win32ui/system/paths.h"
 #include "win32ui/system/strings.h"
 #include "win32ui/system_api.h"
+#include "win32ui/text/text.h"
 
 #include <algorithm>
 #include <climits>
@@ -48,7 +50,7 @@ DWORD WriteAll(HANDLE file, std::string_view bytes)
     return ERROR_SUCCESS;
 }
 
-// read-only file or a directory never becomes replaceable, waiting only helps against scanners and indexers
+// read-only files and directories never become replaceable, retries only help against scanners
 bool Replaceable(const wchar_t* path)
 {
     const DWORD attributes = GetFileAttributesW(path);
@@ -114,10 +116,10 @@ DWORD WriteParts(const wchar_t* path, std::initializer_list<std::string_view> pa
 
 }
 
-DWORD ReadFileBytes(const wchar_t* path, std::vector<unsigned char>* bytes, uint64_t max_bytes, DWORD share)
+DWORD ReadFileBytes(const wchar_t* path, std::vector<unsigned char>* bytes, uint64_t max_bytes)
 {
     bytes->clear();
-    const UniqueFile file(CreateFileW(path, GENERIC_READ, share, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    const UniqueFile file(CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
     LARGE_INTEGER size = {};
     if (!file || !GetFileSizeEx(file.get(), &size))
     {
@@ -153,6 +155,19 @@ DWORD ReadExactly(HANDLE file, size_t size, std::vector<unsigned char>* bytes)
         offset += read;
     }
     return ERROR_SUCCESS;
+}
+
+std::wstring FileReadErrorText(DWORD error)
+{
+    switch (error)
+    {
+    case ERROR_FILE_TOO_LARGE:
+        return Text(L"The file is too large.");
+    case ERROR_INVALID_DATA:
+        return Text(L"The file isn't valid text.");
+    default:
+        return FormatWin32Error(error);
+    }
 }
 
 DWORD ReadTextFile(const wchar_t* path, std::wstring* text, uint64_t max_bytes, bool ansi_fallback, TextEncoding* encoding)
@@ -266,14 +281,22 @@ DWORD WriteFileAtomic(const wchar_t* path, std::string_view bytes)
     return WriteParts(path, {bytes});
 }
 
-DWORD WriteTextFileAtomic(const wchar_t* path, std::wstring_view text, bool utf16)
+DWORD WriteTextFileAtomic(const wchar_t* path, std::wstring_view text, TextEncoding encoding)
 {
-    if (utf16)
+    if (encoding == TextEncoding::utf16)
     {
         return WriteParts(path, {std::string_view("\xFF\xFE", 2), std::string_view(reinterpret_cast<const char*>(text.data()), text.size() * sizeof(wchar_t))});
     }
-    const std::string bytes = WideToMultiByte(text, CP_UTF8);
-    return bytes.empty() && !text.empty() ? ERROR_NO_UNICODE_TRANSLATION : WriteFileAtomic(path, bytes);
+    if (encoding == TextEncoding::ansi)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    const std::optional<std::string> bytes = WideToUtf8(text);
+    if (!bytes)
+    {
+        return ERROR_NO_UNICODE_TRANSLATION;
+    }
+    return WriteParts(path, {encoding == TextEncoding::utf8_bom ? std::string_view("\xEF\xBB\xBF", 3) : std::string_view(), *bytes});
 }
 
 }

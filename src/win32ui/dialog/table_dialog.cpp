@@ -50,14 +50,13 @@ bool HasChecks(const State& state, size_t table)
     return state.spec->on_check && state.spec->check_table >= 0 && table == static_cast<size_t>(state.spec->check_table);
 }
 
-std::wstring Line(const std::vector<std::wstring>& cells)
+void AppendLine(std::wstring* text, const std::vector<std::wstring>& cells)
 {
-    std::wstring line;
     for (size_t index = 0; index < cells.size(); ++index)
     {
-        line.append(index ? L"\t" : L"").append(cells[index]);
+        text->append(index ? L"\t" : L"").append(cells[index]);
     }
-    return line.append(L"\r\n");
+    text->append(L"\r\n");
 }
 
 std::wstring TablesText(const TablesSpec& spec)
@@ -65,10 +64,11 @@ std::wstring TablesText(const TablesSpec& spec)
     std::wstring text = std::wstring(spec.identifier) + L"\r\n";
     for (const TextTable& table : spec.tables)
     {
-        text.append(L"\r\n").append(table.title).append(L"\r\n").append(Line(table.columns));
+        text.append(L"\r\n").append(table.title).append(L"\r\n");
+        AppendLine(&text, table.columns);
         for (const auto& row : table.rows)
         {
-            text.append(Line(row));
+            AppendLine(&text, row);
         }
     }
     return text;

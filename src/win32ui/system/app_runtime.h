@@ -10,11 +10,10 @@
 namespace win32ui
 {
 
-// first call of an exe, DLL loads skip the current directory and heap corruption ends the process, static imports are
-// resolved before, link with /DEPENDENTLOADFLAG:0x800
+// first call of the exe, static imports are resolved before it, link with /DEPENDENTLOADFLAG:0x800
 void HardenProcess() noexcept;
 
-// STA COM without OLE1 DDE, common controls and buffered paint, destruction releases the accessibility services first
+// destruction releases the accessibility services first
 class GuiRuntime
 {
   public:

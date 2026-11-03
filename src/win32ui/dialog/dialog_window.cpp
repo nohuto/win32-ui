@@ -113,7 +113,7 @@ RECT CenteredRect(HWND owner, int width, int height, bool resizable)
     return rect;
 }
 
-// return presses the default button in multiline edits without ES_WANTRETURN, Ctrl+Return inserts a line break
+// return presses the default button in multiline edits without ES_WANTRETURN, Ctrl+Return breaks the line
 bool PressDefaultOnReturn(HWND dialog, const MSG& message)
 {
     if (message.message != WM_KEYDOWN || message.wParam != VK_RETURN || GetKeyState(VK_CONTROL) < 0 || !IsChild(dialog, message.hwnd))
@@ -143,9 +143,13 @@ std::vector<BYTE> LoadDialogTemplate(const wchar_t* name)
     const auto* data = loaded ? static_cast<const BYTE*>(LockResource(loaded)) : nullptr;
     const size_t size = data ? SizeofResource(instance, resource) : 0;
     const auto word = [&](size_t offset) { return offset + 2 <= size ? *reinterpret_cast<const WORD*>(data + offset) : WORD{0}; };
-    // version 1, signature 0xFFFF, menu, class and title follow the 26 byte header, style offset is 12
+    // DLGTEMPLATEEX version 1 with signature 0xFFFF, 26 byte header, style at 12, a missing resource keeps its lookup error
     if (size < 26 || word(0) != 1 || word(2) != 0xFFFF)
     {
+        if (data)
+        {
+            SetLastError(ERROR_INVALID_DATA);
+        }
         return {};
     }
     const auto skip = [&](size_t offset) {
@@ -180,6 +184,7 @@ std::vector<BYTE> LoadDialogTemplate(const wchar_t* name)
     }
     if (items > size)
     {
+        SetLastError(ERROR_INVALID_DATA);
         return {};
     }
 
@@ -279,6 +284,7 @@ bool RegisterDialogClass(HINSTANCE instance, const wchar_t* class_name, const Di
     {
         return true;
     }
+    // own RegisterClassExW, windows are told apart by its atom and a taken name must fail
     WNDCLASSEXW window_class = {sizeof(window_class)};
     window_class.lpfnWndProc = &DialogWindow::WindowProc;
     window_class.style = CS_HREDRAW | CS_VREDRAW;
@@ -456,6 +462,7 @@ bool DialogWindow::CreateTemplateWindow(HWND root_owner, const wchar_t* template
 {
     if (!g_class_atom)
     {
+        SetLastError(ERROR_CLASS_DOES_NOT_EXIST);
         return false;
     }
     const std::vector<BYTE> dialog = LoadDialogTemplate(template_name);
@@ -469,8 +476,7 @@ bool DialogWindow::CreateTemplateWindow(HWND root_owner, const wchar_t* template
     done_ = false;
     result_ = IDCANCEL;
     fonts_.Create(WindowDpi(root_owner));
-    // first window message binds the object, WM_INITDIALOG runs layout, the dialog manager only sends it when a dialog
-    // procedure exists, so give an empty one
+    // the first message binds the object, the dialog manager sends WM_INITDIALOG only with a procedure, so an empty one
     g_creating = this;
     CreateDialogIndirectParamW(g_class_instance, reinterpret_cast<const DLGTEMPLATE*>(dialog.data()), root_owner, [](HWND, UINT, WPARAM, LPARAM) -> INT_PTR { return FALSE; }, 0);
     g_creating = nullptr;
@@ -607,7 +613,7 @@ INT_PTR DialogWindow::RunModal(HWND owner, const wchar_t* template_name)
     }
     if (!CreateTemplateWindow(root_owner, template_name))
     {
-        return IDCANCEL;
+        return -1;
     }
 
     // reenable only owners disabled here, another modal window may still need them disabled

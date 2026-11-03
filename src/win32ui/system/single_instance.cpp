@@ -24,7 +24,7 @@ struct DestroyWindowFn
     }
 };
 
-// both sides read the image path the same way (a subst drive or short name in the launch path doesnt matter)
+// both sides read the image path the same way, subst drives and short names dont matter
 bool RunsThisExe(DWORD process_id)
 {
     static const std::wstring own_image = ProcessImagePath(GetCurrentProcessId());
@@ -80,7 +80,7 @@ HWND FindInstanceWindow(const wchar_t* property, DWORD wait_ms, DWORD skip_id, U
 DWORD SendInstanceText(HWND window, ULONG_PTR id, std::wstring_view text, DWORD timeout_ms)
 {
     DWORD process_id = 0;
-    if (text.empty() || !GetWindowThreadProcessId(window, &process_id))
+    if (text.empty() || text.size() >= MAXDWORD / sizeof(wchar_t) || !GetWindowThreadProcessId(window, &process_id))
     {
         return ERROR_INVALID_PARAMETER;
     }

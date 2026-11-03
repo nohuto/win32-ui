@@ -278,10 +278,20 @@ std::wstring AccountName(const std::wstring& sid_text)
     return domain.empty() ? name : domain + L"\\" + name;
 }
 
+const std::wstring& ComputerName()
+{
+    static const std::wstring name = [] {
+        wchar_t buffer[MAX_COMPUTERNAME_LENGTH + 1] = {};
+        DWORD length = static_cast<DWORD>(std::size(buffer));
+        return GetComputerNameW(buffer, &length) ? std::wstring(buffer, length) : std::wstring();
+    }();
+    return name;
+}
+
 std::wstring ProcessImagePath(DWORD process_id)
 {
     const UniqueHandle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
-    for (DWORD capacity = MAX_PATH; process && capacity <= 32768; capacity *= 2)
+    for (DWORD capacity = MAX_PATH; process; capacity = std::min<DWORD>(capacity * 2, 32768))
     {
         std::wstring path(capacity, L'\0');
         DWORD length = capacity;
@@ -290,7 +300,7 @@ std::wstring ProcessImagePath(DWORD process_id)
             path.resize(length);
             return path;
         }
-        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER || capacity == 32768)
         {
             break;
         }

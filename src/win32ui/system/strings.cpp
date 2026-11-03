@@ -128,9 +128,9 @@ bool IsBlank(std::wstring_view text) noexcept
 std::wstring ToLower(std::wstring_view text)
 {
     std::wstring result(text);
-    if (!result.empty())
+    for (size_t at = 0; at < result.size(); at += MAXDWORD)
     {
-        CharLowerBuffW(result.data(), static_cast<DWORD>(result.size()));
+        CharLowerBuffW(result.data() + at, static_cast<DWORD>(std::min<size_t>(result.size() - at, MAXDWORD)));
     }
     return result;
 }
@@ -286,21 +286,31 @@ std::wstring FormatFixed(double value, int digits)
     return result.ec == std::errc{} ? std::wstring(std::begin(buffer), result.ptr) : std::wstring();
 }
 
-std::wstring HexBytes(std::span<const unsigned char> data, wchar_t separator, bool uppercase, size_t max_bytes)
+namespace
+{
+
+void AppendHexBytes(std::wstring* output, std::span<const unsigned char> data, wchar_t separator, bool uppercase)
 {
     const wchar_t* digits = uppercase ? L"0123456789ABCDEF" : L"0123456789abcdef";
-    const size_t count = max_bytes == 0 ? data.size() : std::min(max_bytes, data.size());
-    std::wstring output;
-    output.reserve(count * (separator ? 3 : 2) + 4);
-    for (size_t index = 0; index < count; ++index)
+    for (size_t index = 0; index < data.size(); ++index)
     {
         if (index != 0 && separator)
         {
-            output.push_back(separator);
+            output->push_back(separator);
         }
-        output.push_back(digits[data[index] >> 4]);
-        output.push_back(digits[data[index] & 0x0F]);
+        output->push_back(digits[data[index] >> 4]);
+        output->push_back(digits[data[index] & 0x0F]);
     }
+}
+
+}
+
+std::wstring HexBytes(std::span<const unsigned char> data, wchar_t separator, bool uppercase, size_t max_bytes)
+{
+    const size_t count = max_bytes == 0 ? data.size() : std::min(max_bytes, data.size());
+    std::wstring output;
+    output.reserve(count * (separator ? 3 : 2) + 4);
+    AppendHexBytes(&output, data.first(count), separator, uppercase);
     if (count < data.size())
     {
         output += L" ...";
@@ -318,7 +328,7 @@ std::wstring HexByteLines(std::span<const unsigned char> data)
         {
             output += L"\r\n";
         }
-        output += HexBytes(data.subspan(start, std::min<size_t>(16, data.size() - start)), L' ', true);
+        AppendHexBytes(&output, data.subspan(start, std::min<size_t>(16, data.size() - start)), L' ', true);
     }
     return output;
 }

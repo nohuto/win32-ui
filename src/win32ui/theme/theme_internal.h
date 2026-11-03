@@ -9,5 +9,6 @@ namespace win32ui
 {
 
 TextRole GetTextRole(HWND label);
+void SetThemeClass(HWND window, const wchar_t* dark_class);
 
 }

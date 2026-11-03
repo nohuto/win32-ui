@@ -21,8 +21,9 @@ enum class TextEncoding
     ansi,
 };
 
-DWORD ReadFileBytes(const wchar_t* path, std::vector<unsigned char>* bytes, uint64_t max_bytes, DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+DWORD ReadFileBytes(const wchar_t* path, std::vector<unsigned char>* bytes, uint64_t max_bytes);
 DWORD ReadTextFile(const wchar_t* path, std::wstring* text, uint64_t max_bytes, bool ansi_fallback = true, TextEncoding* encoding = nullptr);
+std::wstring FileReadErrorText(DWORD error);
 
 std::wstring RandomFileSuffix(const wchar_t* extension);
 // GetTempPath2W where it exists (SYSTEM gets SystemTemp)
@@ -30,6 +31,7 @@ DWORD TempDirectory(std::wstring* path);
 DWORD CreateTempFolder(std::wstring_view prefix, std::wstring* path);
 // waits briefly while another process holds path
 DWORD WriteFileAtomic(const wchar_t* path, std::string_view bytes);
-DWORD WriteTextFileAtomic(const wchar_t* path, std::wstring_view text, bool utf16 = false);
+// unpaired surrogates give ERROR_NO_UNICODE_TRANSLATION in UTF-8, ansi isnt written
+DWORD WriteTextFileAtomic(const wchar_t* path, std::wstring_view text, TextEncoding encoding = TextEncoding::utf8);
 
 }

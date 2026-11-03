@@ -5,6 +5,7 @@
 
 #include "win32ui/handle_owner.h"
 
+#include <shlwapi.h>
 #include <winhttp.h>
 
 #include <climits>
@@ -27,8 +28,7 @@ struct InternetCloser
 };
 using UniqueInternet = UniqueNullable<HINTERNET, InternetCloser>;
 
-// asynchronous request, one operation at a time, its completion signals done, only the calling thread closes the handle
-// (a close from another thread cannot end a synchronous call, and WinHTTP reuses closed handle values)
+// one operation at a time, only the calling thread closes the handle, WinHTTP reuses closed handle values
 struct AsyncRequest
 {
     HINTERNET handle = nullptr;
@@ -66,8 +66,7 @@ struct AsyncRequest
     }
 };
 
-// frees the state once WinHTTP reports the handle closed, a failed close leaves the handle open and its callbacks
-// possible, so the state then stays allocated
+// frees the state on HANDLE_CLOSING, after a failed close callbacks can still come, so it leaks
 struct RequestCloser
 {
     void operator()(AsyncRequest* request) const noexcept
@@ -153,17 +152,39 @@ bool Allowed(HttpHostCheck allow, const UrlParts& parts)
     return allow ? allow(parts.host, parts.secure) : parts.secure;
 }
 
-DWORD FinalUrl(HINTERNET request, UrlParts* parts)
+// Location resolved against url
+DWORD RedirectUrl(HINTERNET request, std::wstring* url)
 {
     DWORD size = 0;
-    WinHttpQueryOption(request, WINHTTP_OPTION_URL, nullptr, &size);
-    std::wstring url(size / sizeof(wchar_t) + 1, L'\0');
-    size = static_cast<DWORD>(url.size() * sizeof(wchar_t));
-    if (!WinHttpQueryOption(request, WINHTTP_OPTION_URL, url.data(), &size))
+    WinHttpQueryHeaders(request, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX, WINHTTP_NO_OUTPUT_BUFFER, &size, WINHTTP_NO_HEADER_INDEX);
+    std::wstring location(size / sizeof(wchar_t), L'\0');
+    if (!WinHttpQueryHeaders(request, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX, location.data(), &size, WINHTTP_NO_HEADER_INDEX))
     {
         return GetLastError();
     }
-    return CrackUrl(url.c_str(), parts);
+    location.resize(size / sizeof(wchar_t));
+    std::wstring combined(url->size() + location.size() + 2, L'\0');
+    for (;;)
+    {
+        DWORD chars = static_cast<DWORD>(combined.size());
+        const HRESULT result = UrlCombineW(url->c_str(), location.c_str(), combined.data(), &chars, 0);
+        if (SUCCEEDED(result))
+        {
+            combined.resize(chars);
+            *url = std::move(combined);
+            return ERROR_SUCCESS;
+        }
+        if (result != E_POINTER || chars <= combined.size())
+        {
+            return static_cast<DWORD>(result);
+        }
+        combined.resize(chars);
+    }
+}
+
+bool IsRedirect(DWORD status)
+{
+    return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
 }
 
 bool ContentLength(HINTERNET request, unsigned long long* length)
@@ -211,90 +232,117 @@ DWORD HttpGet(const std::wstring& url, const wchar_t* user_agent, HttpHostCheck 
         // before Windows 8.1
         session.reset(WinHttpOpen(user_agent, WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC));
     }
-    const UniqueInternet connect(session ? WinHttpConnect(session.get(), parts.host.c_str(), parts.port, 0) : nullptr);
-    if (!connect)
+    if (!session)
     {
         return GetLastError();
     }
-    // pending read writes here until the request is closed
-    const RequestOwner owner(new AsyncRequest);
-    AsyncRequest& request = *owner;
-    if (!request.done || !request.closed)
+    std::wstring current = url;
+    // redirects are followed here so the host check runs before each hop is contacted
+    for (int redirects = 0;; ++redirects)
     {
-        return GetLastError();
-    }
-    request.handle = WinHttpOpenRequest(connect.get(), L"GET", parts.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, parts.secure ? WINHTTP_FLAG_SECURE : 0);
-    if (!request.handle)
-    {
-        return GetLastError();
-    }
-    DWORD_PTR context = reinterpret_cast<DWORD_PTR>(&request);
-    if (!WinHttpSetOption(request.handle, WINHTTP_OPTION_CONTEXT_VALUE, &context, sizeof(context)) ||
-        WinHttpSetStatusCallback(request.handle, RequestCallback, WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES, 0) == WINHTTP_INVALID_STATUS_CALLBACK)
-    {
-        return GetLastError();
-    }
-    request.callbacks = true;
-    // one started operation to its completion, a failure after cancel was set counts as the cancel, a reset connection
-    // can wake the wait before its next check
-    const auto run = [&](BOOL started) {
-        const DWORD error = started ? request.Wait(cancel) : GetLastError();
-        return error && cancel.load() ? static_cast<DWORD>(ERROR_CANCELLED) : error;
-    };
+        const UniqueInternet connect(WinHttpConnect(session.get(), parts.host.c_str(), parts.port, 0));
+        if (!connect)
+        {
+            return GetLastError();
+        }
+        // pending read writes here until the request is closed
+        const RequestOwner owner(new AsyncRequest);
+        AsyncRequest& request = *owner;
+        if (!request.done || !request.closed)
+        {
+            return GetLastError();
+        }
+        request.handle = WinHttpOpenRequest(connect.get(), L"GET", parts.path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, parts.secure ? WINHTTP_FLAG_SECURE : 0);
+        if (!request.handle)
+        {
+            return GetLastError();
+        }
+        DWORD_PTR context = reinterpret_cast<DWORD_PTR>(&request);
+        DWORD no_redirects = WINHTTP_DISABLE_REDIRECTS;
+        if (!WinHttpSetOption(request.handle, WINHTTP_OPTION_CONTEXT_VALUE, &context, sizeof(context)) || !WinHttpSetOption(request.handle, WINHTTP_OPTION_DISABLE_FEATURE, &no_redirects, sizeof(no_redirects)) ||
+            WinHttpSetStatusCallback(request.handle, RequestCallback, WINHTTP_CALLBACK_FLAG_ALL_COMPLETIONS | WINHTTP_CALLBACK_FLAG_HANDLES, 0) == WINHTTP_INVALID_STATUS_CALLBACK)
+        {
+            return GetLastError();
+        }
+        request.callbacks = true;
+        // a failure after cancel counts as the cancel, a reset connection can wake the wait early
+        const auto run = [&](BOOL started) {
+            const DWORD error = started ? request.Wait(cancel) : GetLastError();
+            return error && cancel.load() ? static_cast<DWORD>(ERROR_CANCELLED) : error;
+        };
 
-    if (const DWORD error = run(WinHttpSetTimeouts(request.handle, 5000, 10000, 10000, 30000) && WinHttpSendRequest(request.handle, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, context)))
-    {
-        return error;
-    }
-    if (const DWORD error = run(WinHttpReceiveResponse(request.handle, nullptr)))
-    {
-        return error;
-    }
-    if (const DWORD error = FinalUrl(request.handle, &parts))
-    {
-        return error;
-    }
-    if (!Allowed(allow, parts))
-    {
-        return ERROR_ACCESS_DENIED;
-    }
-    DWORD status = 0;
-    DWORD size = sizeof(status);
-    if (!WinHttpQueryHeaders(request.handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX))
-    {
-        return GetLastError();
-    }
-    if (status != HTTP_STATUS_OK)
-    {
-        return HttpStatusError(status);
-    }
-    unsigned long long length = 0;
-    const bool announced = ContentLength(request.handle, &length);
-    if (announced && length > max_bytes)
-    {
-        return ERROR_FILE_TOO_LARGE;
-    }
-    if (announced)
-    {
-        body->reserve(static_cast<size_t>(length));
-    }
-    for (;;)
-    {
-        if (const DWORD error = run(WinHttpReadData(request.handle, request.piece, kPieceBytes, nullptr)))
+        if (const DWORD error = run(WinHttpSetTimeouts(request.handle, 5000, 10000, 10000, 30000) && WinHttpSendRequest(request.handle, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, context)))
         {
             return error;
         }
-        if (request.bytes == 0)
+        if (const DWORD error = run(WinHttpReceiveResponse(request.handle, nullptr)))
         {
-            break;
+            return error;
         }
-        if (request.bytes > max_bytes - body->size())
+        DWORD status = 0;
+        DWORD size = sizeof(status);
+        if (!WinHttpQueryHeaders(request.handle, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size, WINHTTP_NO_HEADER_INDEX))
+        {
+            return GetLastError();
+        }
+        if (IsRedirect(status))
+        {
+            if (redirects == 10)
+            {
+                return ERROR_WINHTTP_REDIRECT_FAILED;
+            }
+            if (const DWORD error = RedirectUrl(request.handle, &current))
+            {
+                return error;
+            }
+            UrlParts next;
+            if (const DWORD error = CrackUrl(current.c_str(), &next))
+            {
+                return error;
+            }
+            if (parts.secure && !next.secure)
+            {
+                return ERROR_WINHTTP_REDIRECT_FAILED;
+            }
+            if (!Allowed(allow, next))
+            {
+                return ERROR_ACCESS_DENIED;
+            }
+            parts = std::move(next);
+            continue;
+        }
+        if (status != HTTP_STATUS_OK)
+        {
+            return HttpStatusError(status);
+        }
+        unsigned long long length = 0;
+        const bool announced = ContentLength(request.handle, &length);
+        if (announced && length > max_bytes)
         {
             return ERROR_FILE_TOO_LARGE;
         }
-        body->append(request.piece, request.bytes);
+        if (announced)
+        {
+            body->reserve(static_cast<size_t>(length));
+        }
+        for (;;)
+        {
+            if (const DWORD error = run(WinHttpReadData(request.handle, request.piece, kPieceBytes, nullptr)))
+            {
+                return error;
+            }
+            if (request.bytes == 0)
+            {
+                break;
+            }
+            if (request.bytes > max_bytes - body->size())
+            {
+                return ERROR_FILE_TOO_LARGE;
+            }
+            body->append(request.piece, request.bytes);
+        }
+        return announced && body->size() < length ? ERROR_HANDLE_EOF : ERROR_SUCCESS;
     }
-    return announced && body->size() < length ? ERROR_HANDLE_EOF : ERROR_SUCCESS;
 }
 
 }

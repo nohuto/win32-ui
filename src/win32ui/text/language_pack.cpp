@@ -52,8 +52,7 @@ std::wstring Unquote(std::wstring_view line)
     return text;
 }
 
-// arguments a format takes, '*' widths/precisions and conversion letters with their length modifiers, "%-5ls %.*d" ->
-// "ls*d"
+// argument signature of a format, "%-5ls %.*d" gives "ls*d"
 std::wstring Directives(std::wstring_view text)
 {
     std::wstring out;
@@ -210,7 +209,7 @@ std::vector<LanguagePack> InstalledLanguages(const wchar_t* folder)
 {
     std::vector<LanguagePack> packs;
     ForEachFile(JoinPath(folder, L"*.po").c_str(), [&](const WIN32_FIND_DATAW& data) {
-        // "*.po" also matches short names, ".po" alone has no code (an empty code means the languages of the user)
+        // "*.po" also matches short names, a bare ".po" has no code, empty means the user languages
         if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && HasFileExtension(data.cFileName, L".po") && wcslen(data.cFileName) > 3)
         {
             std::wstring code(data.cFileName, wcslen(data.cFileName) - 3);

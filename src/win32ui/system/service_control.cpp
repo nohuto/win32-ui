@@ -46,4 +46,20 @@ bool WaitWhileServicePending(SC_HANDLE service, DWORD pending_state, SERVICE_STA
     return true;
 }
 
+bool StartServiceAndWait(SC_HANDLE service, SERVICE_STATUS_PROCESS* status)
+{
+    if ((!StartServiceW(service, 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) || !QueryServiceProcess(service, status) ||
+        !WaitWhileServicePending(service, SERVICE_START_PENDING, status))
+    {
+        return false;
+    }
+    if (status->dwCurrentState != SERVICE_RUNNING)
+    {
+        const DWORD error = status->dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR ? status->dwServiceSpecificExitCode : status->dwWin32ExitCode;
+        SetLastError(error != ERROR_SUCCESS ? error : ERROR_SERVICE_NOT_ACTIVE);
+        return false;
+    }
+    return true;
+}
+
 }

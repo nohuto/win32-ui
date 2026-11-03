@@ -15,14 +15,17 @@
 #include "win32ui/system/strings.h"
 #include "win32ui/text/text.h"
 #include "win32ui/theme/palette.h"
+#include "win32ui/typed_text_internal.h"
 #include "win32ui/window.h"
 #include "win32ui/window_metrics.h"
 
 #include <algorithm>
+#include <atomic>
 #include <climits>
-#include <cwctype>
 #include <iterator>
 #include <memory>
+#include <mutex>
+#include <utility>
 
 #include <uxtheme.h>
 #include <vsstyle.h>
@@ -46,7 +49,6 @@ constexpr int kMenuColumnBase = 16;
 constexpr UINT kMenuCopy = 0x7F00;
 constexpr UINT kMenuSelectAll = 0x7F01;
 constexpr size_t kMaxCellText = size_t{1} << 20;
-constexpr DWORD kTypeTimeoutMs = 1000;
 constexpr int kGridButtonWidth = 22;
 constexpr int kGridGlyphSize = 16;
 constexpr int kGridCommand = 1;
@@ -64,10 +66,19 @@ struct ListState
     bool dialog_keys = false;
     std::vector<ListColumn> columns;
     std::vector<int> shown_dip;
+    // column pixel widths belong to this DPI
+    UINT dpi = 0;
+    // origin width per column and the width the last DPI change set, a round trip restores the origin
+    struct DpiWidth
+    {
+        int origin = 0;
+        UINT origin_dpi = 0;
+        int set = 0;
+    };
+    std::vector<DpiWidth> dpi_widths;
     ColumnModel model;
     HTHEME header_theme = nullptr;
-    std::wstring typed;
-    DWORD typed_at = 0;
+    TypedText typed;
     HWND grid_button = nullptr;
     HIMAGELIST grid_images = nullptr;
     std::vector<int> grid_edges;
@@ -83,9 +94,11 @@ struct ListState
     int paint_scroll = 0;
 };
 
-// one grid setting and grid button icon pair for every attached list
-bool g_grid_lines = false;
+// shared by the lists of every UI thread, g_lists only under the lock
+std::atomic_bool g_grid_lines{false};
+std::mutex g_lists_lock;
 std::vector<HWND> g_lists;
+const UINT g_grid_message = RegisterWindowMessageW(L"win32ui.ListGridLines");
 int g_grid_icons[2] = {};
 void (*g_grid_changed)(void* context, bool shown) = nullptr;
 void* g_grid_changed_context = nullptr;
@@ -96,7 +109,7 @@ struct AttachedList
     ListState* state;
 };
 
-// lists this thread attached, GetWindowSubclass costs a GetProp kernel call on every custom draw notification
+// lists of this thread, GetWindowSubclass would cost a GetProp on every custom draw
 thread_local std::vector<AttachedList> t_attached;
 
 struct SubclassedHeader
@@ -106,9 +119,7 @@ struct SubclassedHeader
     ListState* state;
 };
 
-// native list asks its header for the rectangle of every column in each hit test and paint, a SetWindowSubclass layer
-// adds GetProp kernel calls to each, a header has no comctl32 chain so a plain window procedure keeps app subclass
-// order
+// headers get rect queries per column on every paint, a plain window procedure skips the GetProp of a subclass
 thread_local std::vector<SubclassedHeader> t_headers;
 
 LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data);
@@ -147,8 +158,7 @@ bool Alive(HWND list, const ListState* state)
     return state ? StateOf(list) == state : IsWindow(list) != FALSE;
 }
 
-// column width change paints the columns right of it at once, a batch of changes skips those paints and invalidates
-// once at its end, from the left edge of the leftmost changed column unless the list scrolled sideways
+// batched width changes paint once at the end, from the leftmost changed column
 class PaintBatch
 {
   public:
@@ -265,8 +275,38 @@ int HeaderSubitem(HWND list, int position)
     return state ? state->model.Subitem(position) : position;
 }
 
+// scales the shown pixels, apps also size columns by hand
+void FollowDpi(HWND list, ListState* state)
+{
+    const UINT dpi = WindowDpi(list);
+    if (dpi == state->dpi)
+    {
+        return;
+    }
+    const UINT old_dpi = std::exchange(state->dpi, dpi);
+    const int count = old_dpi ? ColumnCount(list) : 0;
+    state->dpi_widths.resize(static_cast<size_t>(std::max(count, 0)));
+    PaintBatch batch(list, -1);
+    for (int column = 0; column < count; ++column)
+    {
+        const int width = ListView_GetColumnWidth(list, column);
+        if (width <= 0)
+        {
+            continue;
+        }
+        ListState::DpiWidth& tracked = state->dpi_widths[static_cast<size_t>(column)];
+        if (tracked.set != width)
+        {
+            tracked = {width, old_dpi, 0};
+        }
+        ListView_SetColumnWidth(list, column, std::max(1, MulDiv(tracked.origin, static_cast<int>(dpi), static_cast<int>(tracked.origin_dpi))));
+        tracked.set = ListView_GetColumnWidth(list, column);
+    }
+}
+
 void RememberWidths(HWND list, ListState* state)
 {
+    FollowDpi(list, state);
     const int count = ColumnCount(list);
     state->shown_dip.resize(static_cast<size_t>(std::max(count, 0)), kDefaultWidthDip);
     const UINT dpi = WindowDpi(list);
@@ -304,6 +344,7 @@ void PaintHeader(HWND header, HDC hdc, ListState* state)
 {
     const ListColors colors = ColorsOf();
     HBRUSH surface = SurfaceBrush(GetParent(header), colors);
+    const UINT dpi = WindowDpi(header);
     RECT client = {};
     GetClientRect(header, &client);
     FillRect(hdc, &client, surface);
@@ -323,7 +364,7 @@ void PaintHeader(HWND header, HDC hdc, ListState* state)
     }
     if (arrow_size.cx <= 0 || arrow_size.cy <= 0)
     {
-        arrow_size = {8, 8};
+        arrow_size = {Scale(8, dpi), Scale(8, dpi)};
     }
 
     POINT cursor = {};
@@ -362,8 +403,8 @@ void PaintHeader(HWND header, HDC hdc, ListState* state)
         FillRect(hdc, &divider, CachedBrush(colors.border));
 
         RECT text_rect = rect;
-        text_rect.left += kHeaderTextPadding;
-        text_rect.right -= kHeaderTextPadding;
+        text_rect.left += Scale(kHeaderTextPadding, dpi);
+        text_rect.right -= Scale(kHeaderTextPadding, dpi);
         UINT format = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS;
         if (item.fmt & HDF_RIGHT)
         {
@@ -388,9 +429,11 @@ void PaintHeader(HWND header, HDC hdc, ListState* state)
         {
             // classic mode has no visual style to draw it
             const int mid = (rect.left + rect.right - 1) / 2;
-            const int base = sorted_up ? rect.top + 4 : rect.top + 1;
-            const int tip = sorted_up ? rect.top + 1 : rect.top + 4;
-            const POINT arrow[3] = {{mid - 3, base}, {mid + 3, base}, {mid, tip}};
+            const int near_edge = rect.top + Scale(1, dpi);
+            const int far_edge = rect.top + Scale(4, dpi);
+            const int base = sorted_up ? far_edge : near_edge;
+            const int tip = sorted_up ? near_edge : far_edge;
+            const POINT arrow[3] = {{mid - Scale(3, dpi), base}, {mid + Scale(3, dpi), base}, {mid, tip}};
             HGDIOBJ old_pen = SelectObject(hdc, CachedPen(colors.muted));
             HGDIOBJ old_brush = SelectObject(hdc, CachedBrush(colors.muted));
             Polygon(hdc, arrow, 3);
@@ -484,8 +527,7 @@ void ShowColumnMenu(HWND list, ListState* state, POINT screen)
     ColumnsChanged(list, state);
 }
 
-// keep the largest buffer so consecutive long cells need one message each, shown columns of an attached list are
-// read below its subclasses, a hidden column through the column model
+// the buffer keeps its largest size, shown cells are read below the subclasses, hidden ones from the column model
 void ReadCell(HWND list, const ListState* state, int row, int subitem, std::vector<wchar_t>* buffer, std::wstring* text)
 {
     if (state && state->hooks && state->hooks->cell_text)
@@ -563,11 +605,6 @@ std::pair<int, int> CellTextWidths(HWND list, int column)
     return {all, shown};
 }
 
-bool TypedTextAlive(const ListState* state)
-{
-    return !state->typed.empty() && GetTickCount() - state->typed_at <= kTypeTimeoutMs;
-}
-
 void SelectOnly(HWND list, int row, bool ensure_visible)
 {
     ListView_SetItemState(list, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
@@ -583,29 +620,12 @@ void SelectOnly(HWND list, int row, bool ensure_visible)
 // false for non search characters, spaces only extend existing typed text
 bool TypeToSelect(HWND list, ListState* state, wchar_t character)
 {
-    if (character != L'\b' && (!std::iswprint(character) || character == L'\t'))
+    if (!state->typed.Feed(character))
     {
         return false;
     }
-    if (!TypedTextAlive(state))
-    {
-        state->typed.clear();
-    }
-    if (character == L' ' && state->typed.empty())
-    {
-        return true;
-    }
-    state->typed_at = GetTickCount();
-    if (character != L'\b')
-    {
-        state->typed.push_back(character);
-    }
-    else if (!state->typed.empty())
-    {
-        state->typed.pop_back();
-    }
     const int count = ListView_GetItemCount(list);
-    if (state->typed.empty() || count <= 0)
+    if (state->typed.text.empty() || count <= 0)
     {
         return true;
     }
@@ -624,7 +644,7 @@ bool TypeToSelect(HWND list, ListState* state, wchar_t character)
             return true;
         }
         // text cut to the typed length, equal is a prefix match, greater means the whole text sorts after it
-        const int order = CompareInsensitive(std::wstring_view(text).substr(0, state->typed.size()), state->typed);
+        const int order = CompareInsensitive(std::wstring_view(text).substr(0, state->typed.text.size()), state->typed.text);
         if (order == 0)
         {
             match = row;
@@ -733,16 +753,34 @@ void LayoutGridButton(HWND list, const ListState* state)
     SetWindowPos(button, above && above != button ? above : HWND_TOP, client.right - width, client.top, width, height, SWP_NOACTIVATE | SWP_SHOWWINDOW | order);
 }
 
+void RefreshGridLines(HWND list, const ListState* state)
+{
+    if (state && state->grid_button)
+    {
+        SendMessageW(state->grid_button, TB_CHECKBUTTON, kGridCommand, MAKELPARAM(g_grid_lines ? TRUE : FALSE, 0));
+    }
+    InvalidateRect(list, nullptr, TRUE);
+}
+
 void ApplyGridLines(bool shown)
 {
     g_grid_lines = shown;
-    for (HWND list : g_lists)
+    std::vector<HWND> lists;
     {
-        if (const ListState* state = StateOf(list); state && state->grid_button)
+        const std::lock_guard<std::mutex> lock(g_lists_lock);
+        lists = g_lists;
+    }
+    for (HWND list : lists)
+    {
+        // subclass data of a list on another thread isnt readable here
+        if (GetWindowThreadProcessId(list, nullptr) == GetCurrentThreadId())
         {
-            SendMessageW(state->grid_button, TB_CHECKBUTTON, kGridCommand, MAKELPARAM(shown ? TRUE : FALSE, 0));
+            RefreshGridLines(list, StateOf(list));
         }
-        InvalidateRect(list, nullptr, TRUE);
+        else
+        {
+            PostMessageW(list, g_grid_message, 0, 0);
+        }
     }
 }
 
@@ -835,7 +873,7 @@ bool ItemBounds(HWND list, const ListState* state, int row, RECT* rect)
     return state->model.Direct(list, LVM_GETITEMRECT, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(rect)) != FALSE;
 }
 
-// report rows are evenly spaced, the whole grid goes on once per paint from the top shown row down at its pitch
+// rows are evenly spaced, the grid is drawn once per paint from the top row
 void PaintGridOnce(HWND list, const ListState* state, HDC hdc)
 {
     RECT area = {};
@@ -1049,6 +1087,11 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     {
         return DefSubclassProc(list, message, wparam, lparam);
     }
+    if (message == g_grid_message && message != 0)
+    {
+        RefreshGridLines(list, state);
+        return 0;
+    }
     if (LRESULT translated = 0; state->model.Translate(list, message, wparam, lparam, &translated))
     {
         // translated message can notify the parent, which can destroy the list
@@ -1206,6 +1249,9 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             return result;
         }
         break;
+    case 0x02E2: // WM_DPICHANGED_BEFOREPARENT, not in the targeted SDK
+        RememberWidths(list, state);
+        break;
     case WM_SETFOCUS:
     case WM_KILLFOCUS:
         HideFocusRectangle(list);
@@ -1213,8 +1259,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
     case WM_UPDATEUISTATE:
         {
             const LRESULT result = DefSubclassProc(list, message, wparam, lparam);
-            // UIS_SET of the list itself comes back here, while Windows keeps keyboard cues shown asking again would
-            // never end
+            // an own UIS_SET comes back here, asking again while Windows shows the cues would never end
             if (LOWORD(wparam) != UIS_SET)
             {
                 HideFocusRectangle(list);
@@ -1222,7 +1267,7 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
             return result;
         }
     case WM_KEYDOWN:
-        if (wparam == VK_SPACE && TypedTextAlive(state) && GetKeyState(VK_CONTROL) >= 0 && GetKeyState(VK_MENU) >= 0)
+        if (wparam == VK_SPACE && state->typed.Alive() && GetKeyState(VK_CONTROL) >= 0 && GetKeyState(VK_MENU) >= 0)
         {
             return 0;
         }
@@ -1288,7 +1333,10 @@ LRESULT CALLBACK ListProc(HWND list, UINT message, WPARAM wparam, LPARAM lparam,
         {
             DestroyWindow(state->tip);
         }
-        std::erase(g_lists, list);
+        {
+            const std::lock_guard<std::mutex> lock(g_lists_lock);
+            std::erase(g_lists, list);
+        }
         std::erase_if(t_attached, [&](const AttachedList& entry) { return entry.list == list; });
         RemoveWindowSubclass(list, ListProc, kListSubclassId);
         delete state;
@@ -1318,12 +1366,16 @@ bool Attach(HWND list, const ListViewHooks* hooks, DWORD extra_styles, bool dial
     if (!state)
     {
         auto created = std::make_unique<ListState>();
+        created->dpi = WindowDpi(list);
         if (!SetWindowSubclass(list, ListProc, kListSubclassId, reinterpret_cast<DWORD_PTR>(created.get())))
         {
             return false;
         }
         state = created.release();
-        g_lists.push_back(list);
+        {
+            const std::lock_guard<std::mutex> lock(g_lists_lock);
+            g_lists.push_back(list);
+        }
         t_attached.push_back({list, state});
     }
     state->hooks = hooks;
@@ -1379,6 +1431,7 @@ void RefreshListView(HWND list)
     if (state)
     {
         HookParent(list, state);
+        RememberWidths(list, state);
     }
     if (HWND header = list ? ListView_GetHeader(list) : nullptr)
     {
@@ -1527,7 +1580,7 @@ bool DrawDialogListView(NMHDR* header, LRESULT* result)
 bool ListTypeSearchActive(HWND list)
 {
     const ListState* state = StateOf(list);
-    return state && TypedTextAlive(state);
+    return state && state->typed.Alive();
 }
 
 void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
@@ -1579,6 +1632,8 @@ void SetListColumns(HWND list, const std::vector<ListColumn>& columns)
     }
     if (ListState* state = StateOf(list))
     {
+        state->dpi = dpi;
+        state->dpi_widths.clear();
         state->columns = columns;
         if (!state->columns.empty())
         {
@@ -1757,7 +1812,7 @@ std::vector<int> SelectedListItems(HWND list)
 
 void SetListRows(HWND list, const TextRows& rows)
 {
-    if (!list)
+    if (!list || rows.size() > static_cast<size_t>(INT_MAX))
     {
         return;
     }
@@ -1771,7 +1826,7 @@ void SetListRows(HWND list, const TextRows& rows)
         item.lParam = static_cast<LPARAM>(row);
         item.pszText = const_cast<wchar_t*>(rows[row].empty() ? L"" : rows[row][0].c_str());
         const int index = ListView_InsertItem(list, &item);
-        for (size_t column = 1; index >= 0 && column < rows[row].size(); ++column)
+        for (size_t column = 1; index >= 0 && column < std::min<size_t>(rows[row].size(), INT_MAX); ++column)
         {
             ListView_SetItemText(list, index, static_cast<int>(column), const_cast<wchar_t*>(rows[row][column].c_str()));
         }
@@ -1850,8 +1905,7 @@ void ApplyListSelection(HWND list, const ListSelection& selection)
     const int count = ListView_GetItemCount(list);
     const auto in_range = [count](int row) { return row >= 0 && row < count; };
     const bool all = count > 0 && (selection.all || std::count_if(selection.rows.begin(), selection.rows.end(), in_range) == count);
-    // no WM_SETREDRAW, it saves nothing here (50000 rows 103 ms either way), and a list view keeps WS_VISIBLE while
-    // redraw is off, so a scope would turn WM_SETREDRAW FALSE of a caller back on
+    // no WM_SETREDRAW, it saves nothing here and a scope would undo a redraw off of the caller
     ListView_SetItemState(list, -1, all ? LVIS_SELECTED : 0, LVIS_SELECTED | LVIS_FOCUSED);
     for (size_t index = 0; !all && index < selection.rows.size(); ++index)
     {
@@ -1890,7 +1944,7 @@ void InvertListSelection(HWND list)
     {
         ++first;
     }
-    // one message for the larger side, one per row for the smaller (no WM_SETREDRAW, see ApplyListSelection)
+    // one message for the larger side, one per row for the smaller
     if (kept <= count - kept)
     {
         ListView_SetItemState(list, -1, LVIS_SELECTED, LVIS_SELECTED);

@@ -3,6 +3,7 @@
 
 #include "win32ui/theme/preset_editor.h"
 
+#include "win32ui/dialog/combo_box.h"
 #include "win32ui/dialog/dialog_layout.h"
 #include "win32ui/dialog/dialog_window.h"
 #include "win32ui/dialog/message_dialog.h"
@@ -104,11 +105,14 @@ class PresetEditor final : public DialogWindow
         AttachDialogListView(color_list_, &list_hooks_);
         SetListColumns(color_list_, {{Text(L"Color"), 150, 150}, {Text(L"Hex"), 90, 90}});
         ShowListGridButton(color_list_);
+        std::vector<std::wstring> names;
+        names.reserve(templates_.size());
         for (const ThemePreset& preset : templates_)
         {
-            SendMessageW(template_combo_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(preset.name.c_str()));
+            names.push_back(preset.name);
         }
-        SendMessageW(template_combo_, CB_SETCURSEL, 0, 0);
+        SetComboItems(template_combo_, names);
+        SetComboIndex(template_combo_, 0);
         selected_ = Find(active_name_);
         RefreshPresets();
     }

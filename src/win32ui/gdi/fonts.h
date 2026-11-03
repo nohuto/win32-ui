@@ -27,8 +27,7 @@ int FontHeight(int point_size);
 int FontHeight(int point_size, UINT dpi);
 
 UniqueFont CreateMonoFont(HFONT size_from, UINT dpi);
-// controls use the font until it is replaced or reset, a failed creation keeps the old one, on a DPI change the
-// dialog gets WM_SETFONT before its controls, call it again there
+// the font lives until replaced or reset, a failed creation keeps the old one, call again after a DPI change
 bool SetMonoFont(HWND dialog, std::initializer_list<int> controls, HFONT size_from, UniqueFont* font);
 TEXTMETRICW FontMetrics(HFONT font);
 TEXTMETRICW WindowFontMetrics(HWND window);

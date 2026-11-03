@@ -4,6 +4,8 @@
 #include "win32ui/theme/palette.h"
 
 #include "win32ui/handle_owner.h"
+#include "win32ui/system/registry_value.h"
+#include "win32ui/system/strings.h"
 #include "win32ui/system_api.h"
 #include "win32ui/theme/palette_internal.h"
 
@@ -48,7 +50,7 @@ bool BuildAtLeast(DWORD build)
 // process wide dark popup menus and scroll bars
 void SetAppDark(bool dark)
 {
-    // 1809 uses AllowDarkModeForApp, 1903 onward uses SetPreferredAppMode with ForceDark 2 and ForceLight 3
+    // 1809 has AllowDarkModeForApp, 1903 on SetPreferredAppMode with ForceDark 2 and ForceLight 3
     static const FARPROC app_mode = UxthemeOrdinal(135);
     static const auto refresh_policy = reinterpret_cast<void(WINAPI*)()>(UxthemeOrdinal(104));
     static const auto flush_menus = reinterpret_cast<void(WINAPI*)()>(UxthemeOrdinal(136));
@@ -74,8 +76,7 @@ bool SystemPrefersDark()
 {
     // missing values = light
     DWORD value = 1;
-    DWORD size = sizeof(value);
-    return RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) == ERROR_SUCCESS && value == 0;
+    return ReadRegistryDword(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", &value) == ERROR_SUCCESS && value == 0;
 }
 
 bool Refresh(PaletteState& state)
@@ -176,7 +177,7 @@ bool ThemeMessage(UINT message, LPARAM lparam)
     if (message == WM_SETTINGCHANGE)
     {
         const auto* area = reinterpret_cast<const wchar_t*>(lparam);
-        relevant = area && (_wcsicmp(area, L"ImmersiveColorSet") == 0 || _wcsicmp(area, L"WindowsThemeElement") == 0);
+        relevant = area && (EqualsInsensitive(area, L"ImmersiveColorSet") || EqualsInsensitive(area, L"WindowsThemeElement"));
     }
     return relevant && Refresh(Ready());
 }
@@ -201,7 +202,7 @@ bool ParseThemeMode(std::wstring_view name, ThemeMode* mode)
     for (const ThemeMode candidate : {ThemeMode::system, ThemeMode::light, ThemeMode::dark, ThemeMode::custom})
     {
         const std::wstring_view known = ThemeModeName(candidate);
-        if (name.size() == known.size() && _wcsnicmp(name.data(), known.data(), known.size()) == 0)
+        if (EqualsInsensitive(name, known))
         {
             *mode = candidate;
             return true;

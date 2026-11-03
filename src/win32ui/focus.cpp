@@ -45,7 +45,7 @@ bool Usable(HWND window, HWND pane)
 
 bool IsTextInput(HWND window) noexcept
 {
-    // longer names are cut, a cut name equals none of these, "RichEdit" covers RICHEDIT, RichEdit20A/W and RICHEDIT50W
+    // longer names are cut and match none of these, "RichEdit" covers every RichEdit version
     wchar_t name[32] = {};
     if (!window || !GetClassNameW(window, name, static_cast<int>(std::size(name))))
     {
@@ -60,8 +60,7 @@ bool IsTextInput(HWND window) noexcept
     {
         return true;
     }
-    // edits under other class names (superclasses) select text like an edit, only asked of windows of this thread, a
-    // send to another thread waits for it
+    // superclassed edits select text like an edit, asked only on this thread, a cross-thread send would wait
     return GetWindowThreadProcessId(window, nullptr) == GetCurrentThreadId() && (SendMessageW(window, WM_GETDLGCODE, 0, 0) & DLGC_HASSETSEL) != 0;
 }
 

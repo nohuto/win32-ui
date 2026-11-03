@@ -29,13 +29,12 @@ struct FileDialogSpec
     DWORD* choice = nullptr;
 };
 
-// call on an STA thread, as SYSTEM the default folder is the Documents folder of the user whose shell runs
+// STA thread only, as SYSTEM the default folder is the Documents of the shell user
 DWORD ChooseFileToOpen(HWND owner, const FileDialogSpec& spec, std::wstring* path);
 DWORD ChooseFileToSave(HWND owner, const FileDialogSpec& spec, std::wstring* path);
 DWORD ChooseFolder(HWND owner, std::wstring* path);
 DWORD ChooseComputer(HWND owner, std::wstring* name);
-// asked once per process as SYSTEM when its own Desktop folder is missing (the dialog would show "Location is not
-// available")
+// asked once per process as SYSTEM without a Desktop folder, file dialogs would show Location is not available
 void SetMissingDesktopPrompt(bool (*prompt)(HWND owner, const wchar_t* path));
 
 }

@@ -24,7 +24,7 @@ namespace win32ui
 // SetThreadDescription (Windows 10 1607 and later), success can be 0x10000000, test with SUCCEEDED
 HRESULT NameThread(HANDLE thread, const wchar_t* name) noexcept;
 
-// base of results posted to a window in lparam, so queued messages dropped with the window can delete their payload
+// lparam payloads, messages dropped with their window can still free them
 class PostedPayload
 {
   public:
@@ -41,7 +41,8 @@ template <typename T>
 bool PostPayload(HWND hwnd, UINT message, WPARAM wparam, std::unique_ptr<T>& payload)
 {
     static_assert(std::is_base_of_v<PostedPayload, T>);
-    if (!PostMessageW(hwnd, message, wparam, reinterpret_cast<LPARAM>(static_cast<PostedPayload*>(payload.get()))))
+    // a null window would post a thread message nobody takes
+    if (!hwnd || !PostMessageW(hwnd, message, wparam, reinterpret_cast<LPARAM>(static_cast<PostedPayload*>(payload.get()))))
     {
         return false;
     }

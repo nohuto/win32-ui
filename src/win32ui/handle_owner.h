@@ -92,8 +92,7 @@ struct HandleTraitsBase
 
 }
 
-// CreateEvent, CreateThread, OpenThread and OpenProcess fail with NULL, INVALID_HANDLE_VALUE also names the current
-// process pseudo handle, which must never be closed
+// CreateEvent/Thread and OpenThread/Process fail with NULL, INVALID_HANDLE_VALUE is the process pseudo handle
 struct KernelHandleTraits : detail::HandleTraitsBase<CloseHandle>
 {
     static HANDLE invalid() noexcept

@@ -76,7 +76,8 @@ LRESULT CALLBACK SingleLineProc(HWND edit, UINT message, WPARAM wparam, LPARAM l
             HANDLE handle = GetClipboardData(CF_UNICODETEXT);
             if (const auto* data = handle ? static_cast<const wchar_t*>(GlobalLock(handle)) : nullptr)
             {
-                text = data;
+                // the allocation need not hold a NUL
+                text.assign(data, wcsnlen(data, GlobalSize(handle) / sizeof(wchar_t)));
                 GlobalUnlock(handle);
             }
             CloseClipboard();

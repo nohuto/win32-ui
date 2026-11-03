@@ -104,38 +104,42 @@ TabStripColors ColorsOf()
     return colors;
 }
 
-std::wstring TabText(HWND strip, int index)
+// view into buffer, valid until the next call with it
+std::wstring_view TabText(HWND strip, int index, std::wstring* buffer)
 {
-    std::wstring text(256, L'\0');
+    if (buffer->size() < 256)
+    {
+        buffer->assign(256, L'\0');
+    }
     for (;;)
     {
         TCITEMW item = {};
         item.mask = TCIF_TEXT;
-        item.pszText = text.data();
-        item.cchTextMax = static_cast<int>(text.size());
+        item.pszText = buffer->data();
+        item.cchTextMax = static_cast<int>(buffer->size());
         if (!TabCtrl_GetItem(strip, index, &item) || !item.pszText)
         {
             return {};
         }
         // native control truncates labels to the supplied buffer
-        const size_t length = wcsnlen(item.pszText, text.size());
-        if (length + 1 < text.size() || text.size() >= kMaxLabel)
+        const size_t length = wcsnlen(item.pszText, buffer->size());
+        if (length + 1 < buffer->size() || buffer->size() >= kMaxLabel)
         {
-            return std::wstring(item.pszText, length);
+            return std::wstring_view(item.pszText, length);
         }
-        text.assign(text.size() * 2, L'\0');
+        buffer->assign(buffer->size() * 2, L'\0');
     }
 }
 
-bool CanClose(HWND strip, const TabState* state, int index)
+bool CanClose(const TabState* state, int index)
 {
-    return state->hooks && state->hooks->close && TabCtrl_GetItemCount(strip) > 1 && (!state->hooks->closable || state->hooks->closable(state->hooks->context, index));
+    return state->hooks && state->hooks->close && (!state->hooks->closable || state->hooks->closable(state->hooks->context, index));
 }
 
 bool CloseRect(HWND strip, const TabState* state, int index, RECT* rect)
 {
     RECT item = {};
-    if (index < 0 || !CanClose(strip, state, index) || !TabCtrl_GetItemRect(strip, index, &item))
+    if (index < 0 || !CanClose(state, index) || !TabCtrl_GetItemRect(strip, index, &item))
     {
         return false;
     }
@@ -178,7 +182,7 @@ void ReserveCloseRoom(HWND strip, TabState* state, UINT dpi)
     {
         TCITEMW item = {};
         item.mask = TCIF_IMAGE;
-        item.iImage = CanClose(strip, state, index) ? 0 : -1;
+        item.iImage = CanClose(state, index) ? 0 : -1;
         TabCtrl_SetItem(strip, index, &item);
     }
 }
@@ -201,12 +205,13 @@ bool LabelCut(HWND strip, const TabState* state, int index)
         return false;
     }
     const RECT text = LabelRect(strip, state, index, item);
-    const std::wstring label = TabText(strip, index);
+    std::wstring buffer;
+    const std::wstring_view label = TabText(strip, index, &buffer);
     SIZE size = {};
     HDC dc = GetDC(strip);
     const HFONT font = reinterpret_cast<HFONT>(SendMessageW(strip, WM_GETFONT, 0, 0));
     const HGDIOBJ old = font ? SelectObject(dc, font) : nullptr;
-    GetTextExtentPoint32W(dc, label.c_str(), static_cast<int>(label.size()), &size);
+    GetTextExtentPoint32W(dc, label.data(), static_cast<int>(label.size()), &size);
     if (old)
     {
         SelectObject(dc, old);
@@ -254,7 +259,7 @@ std::vector<int> ClosableTabs(HWND strip, const TabState* state)
     const int count = TabCtrl_GetItemCount(strip);
     for (int index = 0; index < count; ++index)
     {
-        if (CanClose(strip, state, index))
+        if (CanClose(state, index))
         {
             tabs.push_back(index);
         }
@@ -381,7 +386,9 @@ class TabAccessible final : public IAccessible
         {
             return standard_->get_accDescription(child, description);
         }
-        *description = SysAllocString(TabText(strip_, index).c_str());
+        std::wstring buffer;
+        const std::wstring_view text = TabText(strip_, index, &buffer);
+        *description = SysAllocStringLen(text.data(), static_cast<UINT>(text.size()));
         return S_OK;
     }
     HRESULT STDMETHODCALLTYPE get_accRole(VARIANT child, VARIANT* role) override
@@ -608,7 +615,7 @@ void UpdateHot(HWND strip, TabState* state, POINT point)
     }
 }
 
-void DrawItem(HDC hdc, HWND strip, const TabState* state, const TabStripColors& colors, int index, const RECT& item, bool selected)
+void DrawItem(HDC hdc, HWND strip, const TabState* state, const TabStripColors& colors, int index, const RECT& item, bool selected, std::wstring* label_buffer)
 {
     const bool hot = index == state->hot && !selected;
     FillRect(hdc, &item, CachedBrush(selected ? colors.selected : hot ? colors.hover
@@ -629,8 +636,8 @@ void DrawItem(HDC hdc, HWND strip, const TabState* state, const TabStripColors& 
     RECT text = LabelRect(strip, state, index, item);
     SetTextColor(hdc, label);
     SetBkMode(hdc, TRANSPARENT);
-    const std::wstring content = TabText(strip, index);
-    DrawTextW(hdc, content.c_str(), static_cast<int>(content.size()), &text, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    const std::wstring_view content = TabText(strip, index, label_buffer);
+    DrawTextW(hdc, content.data(), static_cast<int>(content.size()), &text, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     if (!has_close)
     {
         return;
@@ -656,12 +663,13 @@ void Paint(HWND strip, const TabState* state, HDC hdc)
     const HGDIOBJ old_font = font ? SelectObject(hdc, font) : nullptr;
     const int count = TabCtrl_GetItemCount(strip);
     const int current = TabCtrl_GetCurSel(strip);
+    std::wstring label_buffer;
     for (int index = 0; index < count; ++index)
     {
         RECT item = {};
-        if (TabCtrl_GetItemRect(strip, index, &item))
+        if (TabCtrl_GetItemRect(strip, index, &item) && RectVisible(hdc, &item))
         {
-            DrawItem(hdc, strip, state, colors, index, item, index == current);
+            DrawItem(hdc, strip, state, colors, index, item, index == current, &label_buffer);
         }
     }
     // only keyboard input focuses the strip
@@ -747,7 +755,7 @@ LRESULT CALLBACK TabProc(HWND strip, UINT message, WPARAM wparam, LPARAM lparam,
     if (message == CloseMessage())
     {
         // tab changes can shift a posted close index, ignore stale presses and disabled strips
-        if (const int index = static_cast<int>(wparam); lparam == state->tab_changes && IsWindowEnabled(strip) && index < TabCtrl_GetItemCount(strip) && CanClose(strip, state, index))
+        if (const int index = static_cast<int>(wparam); lparam == state->tab_changes && IsWindowEnabled(strip) && index < TabCtrl_GetItemCount(strip) && CanClose(state, index))
         {
             ForgetTabs(strip, state);
             state->hooks->close(state->hooks->context, index);
@@ -770,7 +778,8 @@ LRESULT CALLBACK TabProc(HWND strip, UINT message, WPARAM wparam, LPARAM lparam,
         {
             // only truncated labels get tooltips, empty text hides them
             const int index = static_cast<int>(header->idFrom);
-            state->tip_text = LabelCut(strip, state, index) ? TabText(strip, index) : std::wstring();
+            std::wstring buffer;
+            state->tip_text = LabelCut(strip, state, index) ? std::wstring(TabText(strip, index, &buffer)) : std::wstring();
             reinterpret_cast<NMTTDISPINFOW*>(lparam)->lpszText = state->tip_text.data();
             return 0;
         }

@@ -22,10 +22,10 @@ void BringToFront(HWND window) noexcept;
 bool ClassIs(HWND window, const wchar_t* name) noexcept;
 bool ChildRect(HWND parent, HWND child, RECT* rect) noexcept;
 bool EnsureSubclass(HWND window, SUBCLASSPROC proc, UINT_PTR id) noexcept;
-DWORD RegisterWindowClass(HINSTANCE instance, const wchar_t* name, WNDPROC proc, int icon) noexcept;
+// a class registered before counts as success
+DWORD RegisterWindowClass(HINSTANCE instance, const wchar_t* name, WNDPROC proc, int icon, UINT style = 0, int window_extra = 0) noexcept;
 
-// hidden window is left alone, WM_SETREDRAW TRUE would show it (DefWindowProc keeps the redraw state in WS_VISIBLE),
-// dont nest scopes on one window
+// hidden windows are left alone, WM_SETREDRAW TRUE would show them, dont nest scopes on one window
 class RedrawScope
 {
   public:

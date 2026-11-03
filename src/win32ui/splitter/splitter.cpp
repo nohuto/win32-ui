@@ -6,8 +6,8 @@
 #include "win32ui/accessible_name.h"
 #include "win32ui/gdi/buffered_paint.h"
 #include "win32ui/gdi/gdi_cache.h"
-#include "win32ui/splitter/splitter_internal.h"
 #include "win32ui/theme/palette.h"
+#include "win32ui/window.h"
 #include "win32ui/window_metrics.h"
 
 #include <windowsx.h>
@@ -185,19 +185,7 @@ LRESULT CALLBACK SplitterProc(HWND splitter, UINT message, WPARAM wparam, LPARAM
 
 bool RegisterSplitterClass(HINSTANCE instance)
 {
-    WNDCLASSEXW window_class = {sizeof(window_class)};
-    if (GetClassInfoExW(instance, kSplitterClass, &window_class))
-    {
-        return true;
-    }
-    window_class = {sizeof(window_class)};
-    window_class.style = CS_HREDRAW | CS_VREDRAW;
-    window_class.lpfnWndProc = SplitterProc;
-    window_class.hInstance = instance;
-    window_class.cbWndExtra = sizeof(SplitterState*);
-    window_class.lpszClassName = kSplitterClass;
-    // another UI thread may register it between the lookup and here
-    return RegisterClassExW(&window_class) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+    return RegisterWindowClass(instance, kSplitterClass, SplitterProc, 0, CS_HREDRAW | CS_VREDRAW, static_cast<int>(sizeof(SplitterState*))) == ERROR_SUCCESS;
 }
 
 }
@@ -221,11 +209,6 @@ HWND CreateSplitter(HWND parent, int id, const wchar_t* name, const SplitterHook
     SetWindowLongPtrW(splitter, 0, reinterpret_cast<LONG_PTR>(state.release()));
     SetAccessibleName(splitter, name ? name : L"");
     return splitter;
-}
-
-void RefreshSplitter(HWND splitter)
-{
-    InvalidateRect(splitter, nullptr, FALSE);
 }
 
 }

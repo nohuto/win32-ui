@@ -132,21 +132,14 @@ bool OpenServiceProcessToken(const wchar_t* service_name, HANDLE* token)
     {
         return false;
     }
-    if (status.dwCurrentState == SERVICE_STOPPED)
-    {
-        if ((!StartServiceW(service.get(), 0, nullptr) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING) || !QueryServiceProcess(service.get(), &status))
-        {
-            return false;
-        }
-    }
-    if (!WaitWhileServicePending(service.get(), SERVICE_START_PENDING, &status))
+    // a running or starting service only reports ERROR_SERVICE_ALREADY_RUNNING to the start
+    if (!StartServiceAndWait(service.get(), &status))
     {
         return false;
     }
-    if (status.dwCurrentState != SERVICE_RUNNING || status.dwProcessId == 0)
+    if (status.dwProcessId == 0)
     {
-        const DWORD error = status.dwWin32ExitCode == ERROR_SERVICE_SPECIFIC_ERROR ? status.dwServiceSpecificExitCode : status.dwWin32ExitCode;
-        SetLastError(error != ERROR_SUCCESS ? error : ERROR_SERVICE_NOT_ACTIVE);
+        SetLastError(ERROR_SERVICE_NOT_ACTIVE);
         return false;
     }
     const UniqueHandle process(OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, status.dwProcessId));
@@ -177,7 +170,7 @@ bool LaunchWithToken(HANDLE token, const std::wstring& exe, const std::wstring& 
     return true;
 }
 
-// SeDebugPrivilege on a copy of the thread token, then SYSTEM impersonation for the service and the session id
+// SeDebugPrivilege on a thread token copy, then SYSTEM impersonation for the service and session
 bool LaunchElevatedToken(const std::wstring& exe, const std::wstring& arguments, const wchar_t* service_name)
 {
     UniqueHandle current_token;

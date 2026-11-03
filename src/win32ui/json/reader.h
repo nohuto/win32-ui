@@ -134,6 +134,8 @@ class JsonReader
     int max_depth_ = 16;
     int depth_ = 0;
     bool failed_ = false;
+    // reused by Skip
+    std::wstring skipped_;
 };
 
 }

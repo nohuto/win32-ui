@@ -3,34 +3,14 @@
 
 #include "win32ui/json/writer.h"
 
+#include "win32ui/system/strings.h"
+
 #include <algorithm>
-#include <charconv>
-#include <cmath>
 #include <cwchar>
-#include <iterator>
-#include <limits>
 #include <utility>
 
 namespace win32ui
 {
-
-namespace
-{
-
-std::wstring FormatFixed(double value, int digits)
-{
-    if (!std::isfinite(value))
-    {
-        return L"";
-    }
-    constexpr int kMaxDigits = 16;
-    constexpr int kIntegerDigits = std::numeric_limits<double>::max_exponent10 + 1;
-    char buffer[1 + kIntegerDigits + 1 + kMaxDigits] = {};
-    const auto result = std::to_chars(std::begin(buffer), std::end(buffer), value, std::chars_format::fixed, std::clamp(digits, 0, kMaxDigits));
-    return result.ec == std::errc{} ? std::wstring(buffer, result.ptr) : L"";
-}
-
-}
 
 void AppendJsonString(std::wstring* out, std::wstring_view text)
 {
@@ -133,7 +113,7 @@ void JsonWriter::Signed(std::wstring_view key, std::int64_t value)
 
 void JsonWriter::Number(std::wstring_view key, double value, int digits)
 {
-    const std::wstring text = FormatFixed(value, digits);
+    const std::wstring text = FormatFixed(value, std::min(digits, 16));
     Prefix(key);
     out_ += text.empty() ? L"null" : text;
 }

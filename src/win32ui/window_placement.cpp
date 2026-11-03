@@ -13,8 +13,7 @@ namespace win32ui
 namespace
 {
 
-// workspace coordinates start at the work area of the monitor of the rect, the rule
-// GetWindowPlacement/SetWindowPlacement use
+// workspace coordinates start at the work area of the monitor of the rect, like GetWindowPlacement
 POINT WorkspaceOffset(const RECT& rect)
 {
     MONITORINFO info = {sizeof(info)};

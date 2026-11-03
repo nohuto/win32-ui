@@ -82,22 +82,27 @@ void MenuBar::ApplyTheme()
     const int count = GetMenuItemCount(menu_);
     for (int index = 0; index < count; ++index)
     {
-        wchar_t text[128] = {};
+        // length first, the item is inserted again with its whole caption
         MENUITEMINFOW item = {sizeof(item)};
         item.fMask = MIIM_FTYPE | MIIM_STRING | MIIM_SUBMENU | MIIM_ID | MIIM_STATE;
-        item.dwTypeData = text;
-        item.cch = static_cast<UINT>(std::size(text));
         if (!GetMenuItemInfoW(menu_, static_cast<UINT>(index), TRUE, &item))
         {
             continue;
         }
         auto data = std::make_unique<Item>();
-        data->text = text;
+        data->text.resize(static_cast<size_t>(item.cch) + 1);
+        item.dwTypeData = data->text.data();
+        item.cch = static_cast<UINT>(data->text.size());
+        if (!GetMenuItemInfoW(menu_, static_cast<UINT>(index), TRUE, &item))
+        {
+            continue;
+        }
+        data->text.resize(item.cch);
         data->msaa.dwMSAASignature = MSAA_MENU_SIG;
         data->msaa.cchWText = static_cast<DWORD>(data->text.size());
         data->msaa.pszWText = data->text.data();
         RECT measure = {};
-        DrawTextW(dc, text, -1, &measure, DT_SINGLELINE | DT_CALCRECT);
+        DrawTextW(dc, data->text.c_str(), static_cast<int>(data->text.size()), &measure, DT_SINGLELINE | DT_CALCRECT);
         data->width = measure.right - measure.left + Scale(10, dpi);
         data->height = std::max(line_height + Scale(4, dpi), SystemMetricForDpi(SM_CYMENU, dpi) - 1);
         item.fMask |= MIIM_DATA;

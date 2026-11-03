@@ -31,8 +31,7 @@ LRESULT ColumnModel::Native(HWND list, UINT message, WPARAM wparam, LPARAM lpara
     return result;
 }
 
-// SendMessage pays ~0.7us per subclass layer (a GetProp each) on top of the dispatch, the class procedure ~50ns,
-// another thread must not run the procedure itself
+// class procedure past the subclass layers (0.7 us each), only on the list thread
 LRESULT ColumnModel::Direct(HWND list, UINT message, WPARAM wparam, LPARAM lparam) const
 {
     return Local() ? CallWindowProcW(native_, list, message, wparam, lparam) : SendMessageW(list, message, wparam, lparam);
@@ -134,7 +133,7 @@ int ColumnModel::Position(int subitem) const
     return positions_[static_cast<size_t>(subitem)];
 }
 
-// zero width native columns left by a divider drag become hidden ones, the first column gets a width back
+// a divider dragged to 0 hides the column, the first column gets a width back
 void ColumnModel::Reconcile(HWND list, int first_width)
 {
     for (int subitem = Count() - 1; subitem >= 0; --subitem)
@@ -251,8 +250,7 @@ void ColumnModel::Hide(HWND list, int subitem)
     }
     if (!OwnerData(list))
     {
-        // native list drops the text of a deleted column, keep it by item id so sorting while hidden is safe, a cell
-        // without text of its own (never set or LPSTR_TEXTCALLBACK) stays out and asks the parent again when read
+        // native list drops the text of a deleted column, kept by item id, callback cells stay out and ask the parent
         const int rows = static_cast<int>(Direct(list, LVM_GETITEMCOUNT, 0, 0));
         std::vector<wchar_t> buffer(1024);
         for (int row = 0; row < rows; ++row)
@@ -351,6 +349,12 @@ bool ColumnModel::HiddenText(HWND list, UINT message, LVITEMW* item, LRESULT* re
     const int row = item->iItem;
     if (set)
     {
+        // native list refuses a row it doesnt have
+        if (row < 0 || row >= static_cast<int>(Direct(list, LVM_GETITEMCOUNT, 0, 0)))
+        {
+            *result = FALSE;
+            return true;
+        }
         if ((message == LVM_SETITEMW && !(item->mask & LVIF_TEXT)) || OwnerData(list))
         {
             *result = TRUE;

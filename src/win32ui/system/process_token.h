@@ -20,7 +20,7 @@ bool IsProcessTrustedInstaller();
 bool IsProcessPrivileged();
 bool IsUacEnabled();
 
-// scopes on any thread share the token, the last scope of a privilege restores its state from before the first
+// scopes on any thread share the token, the last one restores the state from before the first
 class PrivilegeScope
 {
   public:
@@ -43,6 +43,8 @@ class PrivilegeScope
 std::wstring TokenUserSid(HANDLE token);
 const std::wstring& ProcessUserSid();
 std::wstring AccountName(const std::wstring& sid);
+// NetBIOS name read once, Windows changes it only at restart, empty when unknown
+const std::wstring& ComputerName();
 std::wstring ProcessImagePath(DWORD process_id);
 // folder above it counts too
 bool IsWritableByNonAdmins(const std::wstring& path);

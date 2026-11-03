@@ -131,11 +131,11 @@ void FontSet::Create(UINT dpi)
 
 int FontSet::TextWidth(const wchar_t* text) const
 {
-    if (!text || !*text)
+    const std::wstring_view view(text ? text : L"");
+    if (view.empty() || view.size() > static_cast<size_t>(INT_MAX))
     {
         return 0;
     }
-    const std::wstring_view view(text);
     if (const auto known = widths_.find(view); known != widths_.end())
     {
         return known->second;

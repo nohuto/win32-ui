@@ -254,10 +254,10 @@ std::wstring ThemePresetErrorText(const ThemePresetResult& result)
         text = result.code != ERROR_SUCCESS ? FormatWin32Error(result.code) : Text(L"The file could not be read.");
         break;
     case ThemePresetError::too_large:
-        text = Text(L"The file is too large.");
+        text = FileReadErrorText(ERROR_FILE_TOO_LARGE);
         break;
     case ThemePresetError::bad_encoding:
-        text = Text(L"The file isn't valid text.");
+        text = FileReadErrorText(ERROR_INVALID_DATA);
         break;
     case ThemePresetError::missing_name:
         text = Text(L"A preset has no name.");

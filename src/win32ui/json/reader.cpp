@@ -372,9 +372,10 @@ bool JsonReader::Unsigned(std::uint64_t* out)
 bool JsonReader::Signed(std::int64_t* out)
 {
     const bool negative = Next() == L'-';
-    if (negative)
+    // Unsigned skips space and comments, none may follow the minus
+    if (negative && (++cursor_ == text_.size() || !Digit(text_[cursor_])))
     {
-        ++cursor_;
+        return Fail(JsonErrorCode::kUnsignedExpected);
     }
     std::uint64_t magnitude = 0;
     if (!Unsigned(&magnitude))
@@ -415,10 +416,7 @@ bool JsonReader::Skip()
     case L'[':
         return Array([this] { return Skip(); });
     case L'"':
-        {
-            std::wstring ignored;
-            return String(&ignored);
-        }
+        return String(&skipped_);
     case L't':
         return Word(L"true");
     case L'f':

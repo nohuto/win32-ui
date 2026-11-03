@@ -49,8 +49,7 @@ struct SuggestCall
     std::vector<std::wstring> result;
 };
 
-// calls on their way to the thread of an edit, the sender removes its own so a call the edit never runs (timeout, edit
-// destroyed) doesnt leak and one it gets late is skipped
+// calls queued for an edit thread, the sender removes its own so a timed out call neither leaks nor runs late
 struct PendingCalls
 {
     std::mutex lock;
@@ -124,8 +123,7 @@ LRESULT CALLBACK EditProc(HWND edit, UINT message, WPARAM wparam, LPARAM lparam,
     return DefSubclassProc(edit, message, wparam, lparam);
 }
 
-// IAutoComplete enumerates on its own thread, one Reset and a Next per suggestion, the suggestions are read once per
-// enumeration on the thread of the edit
+// IAutoComplete enumerates on its own thread, suggestions are read once per Reset on the edit thread
 class SuggestSource final : public IEnumString, public IACList
 {
   public:

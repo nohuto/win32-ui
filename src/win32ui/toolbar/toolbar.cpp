@@ -100,9 +100,9 @@ void LoadIcons(HWND toolbar, ToolbarState* state)
     // dropdown arrows make these messages add 6 px after DPI changes, temporarily remove them
     const LRESULT extended = SendMessageW(toolbar, TB_GETEXTENDEDSTYLE, 0, 0);
     SendMessageW(toolbar, TB_SETEXTENDEDSTYLE, 0, extended & ~TBSTYLE_EX_DRAWDDARROWS);
-    SendMessageW(toolbar, TB_SETPADDING, 0, MAKELPARAM(ScaleForDpi(kPaddingXDip, dpi), ScaleForDpi(kPaddingYDip, dpi)));
+    SendMessageW(toolbar, TB_SETPADDING, 0, MAKELPARAM(Scale(kPaddingXDip, dpi), Scale(kPaddingYDip, dpi)));
     SendMessageW(toolbar, TB_SETBITMAPSIZE, 0, MAKELPARAM(size, size));
-    const int button = size + ScaleForDpi(kButtonMarginDip, dpi);
+    const int button = size + Scale(kButtonMarginDip, dpi);
     SendMessageW(toolbar, TB_SETBUTTONSIZE, 0, MAKELPARAM(button, button));
     SendMessageW(toolbar, TB_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(images));
     SendMessageW(toolbar, TB_SETEXTENDEDSTYLE, 0, extended);

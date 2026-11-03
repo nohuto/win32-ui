@@ -7,6 +7,7 @@
 #include "win32ui/dialog/file_dialog_internal.h"
 #include "win32ui/handle_owner.h"
 #include "win32ui/system/error_text.h"
+#include "win32ui/system/paths.h"
 #include "win32ui/system/process_token.h"
 #include "win32ui/text/text.h"
 
@@ -53,7 +54,7 @@ void PrepareForSystem(HWND owner, IFileDialog* dialog)
     }
     UniqueCoTask<PWSTR> own_desktop;
     if (g_missing_desktop_prompt && SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, KF_FLAG_DONT_VERIFY, nullptr, own_desktop.put())) &&
-        GetFileAttributesW(own_desktop.get()) == INVALID_FILE_ATTRIBUTES && std::exchange(g_missing_desktop_prompt, nullptr)(owner, own_desktop.get()))
+        IsMissing(own_desktop.get()) && std::exchange(g_missing_desktop_prompt, nullptr)(owner, own_desktop.get()))
     {
         CreateDirectoryW(own_desktop.get(), nullptr);
     }

@@ -54,7 +54,7 @@ struct AboutSpec
 
 void ShowAbout(HWND owner, const AboutSpec& spec);
 
-// CF_UNICODETEXT readers stop at an embedded NUL
+// CF_UNICODETEXT readers stop at an embedded NUL, GetLastError has the reason of a failure
 bool CopyTextToClipboard(HWND owner, std::wstring_view text);
 
 }

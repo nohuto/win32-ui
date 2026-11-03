@@ -44,7 +44,6 @@ target_sources(win32ui
         src/win32ui/menu/popup_menu.cpp
         src/win32ui/menu/shortcuts.cpp
         src/win32ui/splitter/splitter.cpp
-        src/win32ui/splitter/splitter_internal.h
         src/win32ui/status_bar/status_bar.cpp
         src/win32ui/system/app_runtime.cpp
         src/win32ui/system/console.cpp
@@ -82,6 +81,7 @@ target_sources(win32ui
         src/win32ui/theme/theme_presets_internal.h
         src/win32ui/toolbar/toolbar.cpp
         src/win32ui/tree_view/tree_view.cpp
+        src/win32ui/typed_text_internal.h
         src/win32ui/window.cpp
         src/win32ui/window_metrics.cpp
         src/win32ui/window_placement.cpp
@@ -153,7 +153,7 @@ target_compile_features(win32ui PUBLIC cxx_std_20)
 target_compile_definitions(win32ui PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0600 WINVER=0x0600)
 include(cmake/Win32uiApp.cmake)
 target_compile_options(win32ui PRIVATE ${WIN32UI_COMPILE_OPTIONS} $<$<BOOL:${PROJECT_IS_TOP_LEVEL}>:/WX>)
-target_link_libraries(win32ui PRIVATE comctl32 comdlg32 uxtheme dwmapi oleacc shell32 ole32 userenv wtsapi32 winhttp bcrypt crypt32)
+target_link_libraries(win32ui PRIVATE comctl32 comdlg32 uxtheme dwmapi oleacc shell32 ole32 userenv wtsapi32 winhttp bcrypt crypt32 shlwapi)
 
 if (PROJECT_IS_TOP_LEVEL)
     file(GLOB stress_sources CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/stress/*.cpp")

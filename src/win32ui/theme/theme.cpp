@@ -11,7 +11,6 @@
 #include "win32ui/gdi/fonts.h"
 #include "win32ui/gdi/gdi_cache.h"
 #include "win32ui/list_view/list_view.h"
-#include "win32ui/splitter/splitter_internal.h"
 #include "win32ui/status_bar/status_bar.h"
 #include "win32ui/tab_strip/tab_strip.h"
 #include "win32ui/text/text.h"
@@ -169,7 +168,15 @@ LRESULT DrawCheckBox(const NMCUSTOMDRAW* draw)
         text_rect.right -= padding;
     }
     const COLORREF text_color = disabled ? colors.muted_text : colors.text;
-    const UINT format = DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | (show_cues ? 0 : DT_HIDEPREFIX);
+    const bool multiline = (style & BS_MULTILINE) != 0;
+    const UINT format = (multiline ? DT_WORDBREAK : DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS) | (show_cues ? 0 : DT_HIDEPREFIX);
+    if (multiline)
+    {
+        // DT_VCENTER needs DT_SINGLELINE, wrapped lines are centered here
+        RECT measured = text_rect;
+        DrawTextW(hdc, text.c_str(), -1, &measured, format | DT_CALCRECT);
+        text_rect.top += std::max(0, static_cast<int>((text_rect.bottom - text_rect.top) - (measured.bottom - measured.top)) / 2);
+    }
     if (button_theme)
     {
         DTTOPTS options = {};
@@ -328,7 +335,9 @@ void PaintComboBox(HWND combo, HDC hdc, const ComboState* state)
 LRESULT CALLBACK ComboProc(HWND combo, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR, DWORD_PTR data)
 {
     auto* state = reinterpret_cast<ComboState*>(data);
-    const bool paint = (GetWindowLongPtrW(combo, GWL_STYLE) & CBS_DROPDOWNLIST) != CBS_SIMPLE;
+    // owner drawn items paint themselves, without CBS_HASSTRINGS their text is item data
+    const LONG_PTR combo_style = GetWindowLongPtrW(combo, GWL_STYLE);
+    const bool paint = (combo_style & CBS_DROPDOWNLIST) != CBS_SIMPLE && !(combo_style & (CBS_OWNERDRAWFIXED | CBS_OWNERDRAWVARIABLE));
     switch (message)
     {
     case WM_NCDESTROY:
@@ -503,8 +512,7 @@ void ApplyControl(HWND window)
     wchar_t name[64] = {};
     GetClassNameW(window, name, static_cast<int>(std::size(name)));
     const ThemeColors& colors = CurrentThemeColors();
-    // theme every window so plain scroll bars follow too, list headers keep the items view theme because it adds the
-    // sort arrow
+    // every window gets the theme for its scroll bars, list headers keep ItemsView for the sort arrow
     if (_wcsicmp(name, WC_HEADERW) == 0)
     {
         ThemeClass(window, L"DarkMode_ItemsView", L"ItemsView");
@@ -587,7 +595,7 @@ void RefreshLibraryControl(HWND window)
     }
     else if (_wcsicmp(name, L"win32ui.Splitter") == 0)
     {
-        RefreshSplitter(window);
+        InvalidateRect(window, nullptr, FALSE);
     }
 }
 

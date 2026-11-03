@@ -13,9 +13,7 @@ namespace win32ui
 namespace
 {
 
-// length = the reported length, room for one character more, a longer copy means the text grew after its length was
-// read (also from 0), so it is read again with more room, GetWindowTextW takes an int buffer size, at that limit the
-// copy is kept
+// one replacement character, a full copy means the text grew meanwhile and is read again with more room
 std::wstring ReadText(HWND window, int length)
 {
     constexpr int kMaxLength = INT_MAX - 2;
@@ -119,9 +117,11 @@ bool EnsureSubclass(HWND window, SUBCLASSPROC proc, UINT_PTR id) noexcept
     return window && (GetWindowSubclass(window, proc, id, nullptr) || SetWindowSubclass(window, proc, id, 0));
 }
 
-DWORD RegisterWindowClass(HINSTANCE instance, const wchar_t* name, WNDPROC proc, int icon) noexcept
+DWORD RegisterWindowClass(HINSTANCE instance, const wchar_t* name, WNDPROC proc, int icon, UINT style, int window_extra) noexcept
 {
     WNDCLASSEXW window_class = {sizeof(window_class)};
+    window_class.style = style;
+    window_class.cbWndExtra = window_extra;
     window_class.lpfnWndProc = proc;
     window_class.hInstance = instance;
     window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
