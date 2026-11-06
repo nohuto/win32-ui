@@ -111,12 +111,6 @@ ThemePresetResult WriteText(const std::wstring& path, const std::wstring& conten
     return code == ERROR_SUCCESS ? ThemePresetResult{} : ThemePresetResult{ThemePresetError::write_failed, 0, code};
 }
 
-// persist thirteen colors and dark flag, rebuild error color from the flag
-bool SameSavedColors(const ThemeColors& colors, bool dark, const ThemeColors& saved)
-{
-    return dark == saved.dark && std::ranges::all_of(kColorFields, [&](const ColorField& field) { return colors.*field.member == saved.*field.member; });
-}
-
 }
 
 const std::vector<ThemePreset>& BuiltInThemePresets()
@@ -285,11 +279,7 @@ ThemePresetLoad LoadThemePresetFile(const std::wstring& path, std::vector<ThemeP
     ThemePresetLoad load;
     load.result = ReadThemePresets(path, presets);
     const ThemePresetResult& result = load.result;
-    if (result.error == ThemePresetError::none && !presets->empty())
-    {
-        load.save_needed = MergeBuiltInThemePresets(presets, *active_name);
-    }
-    else
+    if (result.error != ThemePresetError::none || presets->empty())
     {
         *presets = BuiltInThemePresets();
         // missing or empty file gets the built-ins, any other problem leaves the file for the user
@@ -306,52 +296,6 @@ ThemePresetLoad LoadThemePresetFile(const std::wstring& path, std::vector<ThemeP
         *active_name = active->name;
     }
     return load;
-}
-
-bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& active_name)
-{
-    if (!presets)
-    {
-        return false;
-    }
-    const auto taken = [presets](std::wstring_view name) {
-        return std::ranges::any_of(*presets, [&](const ThemePreset& preset) { return EqualsInsensitive(preset.name, name); });
-    };
-    bool changed = false;
-    for (const ThemePreset& builtin : BuiltInThemePresets())
-    {
-        const auto found = std::ranges::find_if(*presets, [&](const ThemePreset& preset) { return EqualsInsensitive(preset.name, builtin.name); });
-        if (found == presets->end())
-        {
-            presets->push_back(builtin);
-            changed = true;
-            continue;
-        }
-        const bool current = SameSavedColors(builtin.colors, builtin.colors.dark, found->colors);
-        if (current && found->name == builtin.name)
-        {
-            continue;
-        }
-        if (current)
-        {
-            *found = builtin;
-            changed = true;
-            continue;
-        }
-        std::wstring kept;
-        for (int number = 2; kept.empty() || taken(kept); ++number)
-        {
-            kept = builtin.name + L" " + std::to_wstring(number);
-        }
-        if (EqualsInsensitive(active_name, found->name))
-        {
-            active_name = kept;
-        }
-        found->name = std::move(kept);
-        presets->push_back(builtin);
-        changed = true;
-    }
-    return changed;
 }
 
 const ThemePreset* FindThemePreset(const std::vector<ThemePreset>& presets, std::wstring_view name)

@@ -60,7 +60,7 @@ class MessageDialog final : public DialogWindow
 {
   public:
     explicit MessageDialog(const MessageSpec& spec)
-        : spec_(spec), details_(EditLineBreaks(TrimTrailingBreaks(spec.details))), multiline_(spec.wrap_details || details_.find(L'\n') != std::wstring::npos)
+        : spec_(spec), details_(EditLineBreaks(TrimTrailingBreaks(spec.details))), multiline_(details_.find(L'\n') != std::wstring::npos)
     {
     }
 
@@ -68,17 +68,22 @@ class MessageDialog final : public DialogWindow
     void OnCreate() override
     {
         SetWindowTextW(hwnd(), spec_.title.c_str());
+        const auto client_width = [this]() -> int {
+            if (spec_.outer_width_dip <= 0)
+            {
+                return Px(spec_.width_dip);
+            }
+            RECT frame = {};
+            AdjustWindowRectForDpi(&frame, static_cast<DWORD>(GetWindowLongPtrW(hwnd(), GWL_STYLE)), static_cast<DWORD>(GetWindowLongPtrW(hwnd(), GWL_EXSTYLE)), dpi());
+            return Px(spec_.outer_width_dip) - (frame.right - frame.left);
+        };
+        // wrapped details that fit one line keep the fixed single line box
+        multiline_ = multiline_ || (spec_.wrap_details && DetailLines(client_width() - TextLeft() - Px(metrics::kDialogContentMargin)) > 1);
         if (multiline_)
         {
             SetWindowLongPtrW(hwnd(), GWL_STYLE, GetWindowLongPtrW(hwnd(), GWL_STYLE) | WS_THICKFRAME);
         }
-        client_width_ = Px(spec_.width_dip);
-        if (spec_.outer_width_dip > 0)
-        {
-            RECT frame = {};
-            AdjustWindowRectForDpi(&frame, static_cast<DWORD>(GetWindowLongPtrW(hwnd(), GWL_STYLE)), static_cast<DWORD>(GetWindowLongPtrW(hwnd(), GWL_EXSTYLE)), dpi());
-            client_width_ = Px(spec_.outer_width_dip) - (frame.right - frame.left);
-        }
+        client_width_ = client_width();
         SetClientWidth(hwnd(), client_width_, dpi());
         if (spec_.icon)
         {
@@ -91,20 +96,7 @@ class MessageDialog final : public DialogWindow
         SetWindowTextW(message_, spec_.message.c_str());
         if (!details_.empty())
         {
-            DWORD style = WS_TABSTOP | ES_READONLY;
-            if (multiline_)
-            {
-                style |= ES_MULTILINE | ES_AUTOVSCROLL;
-                // wrap at opening width, wider windows need fewer lines
-                if (DetailLines(client_width_ - TextLeft() - Px(metrics::kDialogContentMargin)) > kMaxDetailLines)
-                {
-                    style |= WS_VSCROLL;
-                }
-            }
-            else
-            {
-                style |= ES_AUTOHSCROLL;
-            }
+            const DWORD style = WS_TABSTOP | ES_READONLY | (multiline_ ? ES_MULTILINE | ES_AUTOVSCROLL : ES_AUTOHSCROLL);
             // edit creation fails when text exceeds the default 32767 character limit
             details_box_ = CreateControl(hwnd(), WC_EDITW, L"", style, kMessageDetailsId);
             SendMessageW(details_box_, EM_SETLIMITTEXT, 0, 0);
@@ -169,7 +161,20 @@ class MessageDialog final : public DialogWindow
         y += message_height + gap;
         if (details_box_)
         {
-            const int lines = std::clamp(multiline_ ? DetailLines(text_width) : 1, 1, kMaxDetailLines);
+            int lines = 1;
+            if (multiline_)
+            {
+                // the edit also breaks after hyphens, so it counts its own lines at this width
+                Place(details_box_, text_x, y, text_width, Px(kControlHeight));
+                lines = static_cast<int>(SendMessageW(details_box_, EM_GETLINECOUNT, 0, 0));
+                // decided at opening width, wider windows need fewer lines
+                if (!sized_ && lines > kMaxDetailLines)
+                {
+                    SetWindowLongPtrW(details_box_, GWL_STYLE, GetWindowLongPtrW(details_box_, GWL_STYLE) | WS_VSCROLL);
+                    SetWindowPos(details_box_, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+                }
+            }
+            lines = std::clamp(lines, 1, kMaxDetailLines);
             const int content = Px(kControlHeight - kDetailLineHeight) + lines * fonts().line_height();
             const int available = height - y - gap - button_height - bottom_margin;
             const int box_height = multiline_ && sized_ ? std::max(content, available) : content;
@@ -205,7 +210,7 @@ class MessageDialog final : public DialogWindow
         }
         if (control && control == copy_)
         {
-            CopyTextToClipboard(hwnd(), spec_.message + L"\r\n\r\n" + details_);
+            CopyTextToClipboard(hwnd(), details_);
             return true;
         }
         for (const auto& button : spec_.buttons)

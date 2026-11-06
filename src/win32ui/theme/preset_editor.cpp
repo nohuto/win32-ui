@@ -20,7 +20,6 @@
 #include <windowsx.h>
 
 #include <algorithm>
-#include <functional>
 #include <iterator>
 
 namespace win32ui
@@ -35,12 +34,6 @@ constexpr int kGroupTemplatesId = 2116;
 constexpr int kCopyCommand = 0x7F00;
 constexpr int kSelectAllCommand = 0x7F01;
 constexpr const wchar_t* kCopySuffix = L" Copy";
-
-bool IsBuiltInThemePreset(std::wstring_view name)
-{
-    const std::vector<ThemePreset>& builtins = BuiltInThemePresets();
-    return std::any_of(builtins.begin(), builtins.end(), [&](const ThemePreset& preset) { return EqualsInsensitive(preset.name, name); });
-}
 
 // name is one line of the preset file and the reader trims it
 std::wstring Trimmed(std::wstring text)
@@ -157,15 +150,11 @@ class PresetEditor final : public DialogWindow
         case kPresetDarkId:
             {
                 const bool dark = Button_GetCheck(dark_check_) == BST_CHECKED;
-                const bool changed = Change([dark](ThemePreset& preset) {
+                Change([dark](ThemePreset& preset) {
                     preset.colors.dark = dark;
                     // file has no error color, choose the built in color for the preset dark flag
                     preset.colors.error = BuiltInThemeColors(dark).error;
                 });
-                if (!changed)
-                {
-                    SyncSelection();
-                }
                 return true;
             }
         case kPresetApplyTemplateId:
@@ -233,6 +222,12 @@ class PresetEditor final : public DialogWindow
         return selected_ >= 0 && static_cast<size_t>(selected_) < presets_.size() ? &presets_[static_cast<size_t>(selected_)] : nullptr;
     }
 
+    // custom theme needs a preset, the last one stays
+    bool CanDelete()
+    {
+        return Selected() && presets_.size() > 1;
+    }
+
     int Find(std::wstring_view name) const
     {
         for (size_t index = 0; index < presets_.size(); ++index)
@@ -282,30 +277,14 @@ class PresetEditor final : public DialogWindow
         RefreshPresets();
     }
 
-    // built ins stay unchanged, edits prompt for a named copy, false if nothing changed
-    bool Change(const std::function<void(ThemePreset&)>& change)
+    template <typename Edit>
+    void Change(const Edit& change)
     {
-        ThemePreset* preset = Selected();
-        if (!preset)
-        {
-            return false;
-        }
-        if (!IsBuiltInThemePreset(preset->name))
+        if (ThemePreset* preset = Selected())
         {
             change(*preset);
-            SyncSelection();
-            return true;
         }
-        std::wstring name;
-        if (!Prompt(Text(L"New Preset"), Unique(preset->name + kCopySuffix), &name))
-        {
-            return false;
-        }
-        ThemePreset copy = *preset;
-        copy.name = Unique(name);
-        change(copy);
-        Add(std::move(copy));
-        return true;
+        SyncSelection();
     }
 
     void NewPreset()
@@ -325,7 +304,7 @@ class PresetEditor final : public DialogWindow
     {
         ThemePreset* preset = Selected();
         std::wstring name;
-        if (!preset || IsBuiltInThemePreset(preset->name) || !Prompt(Text(L"Rename Preset"), preset->name, &name))
+        if (!preset || !Prompt(Text(L"Rename Preset"), preset->name, &name))
         {
             return;
         }
@@ -336,7 +315,7 @@ class PresetEditor final : public DialogWindow
     void Delete()
     {
         const ThemePreset* preset = Selected();
-        if (!preset || IsBuiltInThemePreset(preset->name) || (hooks_->confirm_delete && !hooks_->confirm_delete(hwnd(), preset->name)))
+        if (!CanDelete() || (hooks_->confirm_delete && !hooks_->confirm_delete(hwnd(), preset->name)))
         {
             return;
         }
@@ -451,13 +430,16 @@ class PresetEditor final : public DialogWindow
             }
         }
         Button_SetCheck(dark_check_, preset && preset->colors.dark ? BST_CHECKED : BST_UNCHECKED);
-        for (const int id : {kPresetDuplicateId, kPresetEditColorId, kPresetDarkId, kPresetApplyTemplateId})
+        for (const int id : {kPresetDuplicateId, kPresetRenameId, kPresetEditColorId, kPresetDarkId, kPresetApplyTemplateId})
         {
             EnableWindow(GetDlgItem(hwnd(), id), preset != nullptr);
         }
-        const bool own = preset && !IsBuiltInThemePreset(preset->name);
-        EnableWindow(GetDlgItem(hwnd(), kPresetRenameId), own);
-        EnableWindow(GetDlgItem(hwnd(), kPresetDeleteId), own);
+        const HWND delete_button = GetDlgItem(hwnd(), kPresetDeleteId);
+        if (!CanDelete() && GetFocus() == delete_button)
+        {
+            SendMessageW(hwnd(), WM_NEXTDLGCTL, reinterpret_cast<WPARAM>(preset_list_), TRUE);
+        }
+        EnableWindow(delete_button, CanDelete());
     }
 
     bool ShowMenu(HWND list, POINT screen)
@@ -471,12 +453,10 @@ class PresetEditor final : public DialogWindow
         const UINT row_flags = MF_STRING | (row ? 0 : MF_GRAYED);
         if (list == preset_list_)
         {
-            const ThemePreset* preset = Selected();
-            const UINT own_flags = MF_STRING | (preset && !IsBuiltInThemePreset(preset->name) ? 0 : MF_GRAYED);
             AppendMenuItem(menu, MF_STRING, kPresetNewId, Text(L"New..."));
             AppendMenuItem(menu, row_flags, kPresetDuplicateId, Text(L"Duplicate"));
-            AppendMenuItem(menu, own_flags, kPresetRenameId, Text(L"Rename..."));
-            AppendMenuItem(menu, own_flags, kPresetDeleteId, Text(L"Delete"));
+            AppendMenuItem(menu, row_flags, kPresetRenameId, Text(L"Rename..."));
+            AppendMenuItem(menu, MF_STRING | (CanDelete() ? 0 : MF_GRAYED), kPresetDeleteId, Text(L"Delete"));
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuItem(menu, MF_STRING, kPresetImportId, Text(L"Import..."));
             AppendMenuItem(menu, MF_STRING, kPresetExportId, Text(L"Export..."));

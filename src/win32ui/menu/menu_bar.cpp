@@ -17,6 +17,19 @@
 namespace win32ui
 {
 
+namespace
+{
+
+// owner drawn bar items get ODS_NOACCEL even when the user wants access keys always underlined
+bool AccessKeysAlwaysShown()
+{
+    BOOL cues = FALSE;
+    BOOL keyboard = FALSE;
+    return (SystemParametersInfoW(SPI_GETKEYBOARDCUES, 0, &cues, 0) && cues) || (SystemParametersInfoW(SPI_GETKEYBOARDPREF, 0, &keyboard, 0) && keyboard);
+}
+
+}
+
 struct MenuBar::Item
 {
     MSAAMENUINFO msaa; // must be first for owner drawn menu accessibility
@@ -150,7 +163,7 @@ bool MenuBar::Draw(const DRAWITEMSTRUCT* info) const
     SetTextColor(info->hDC, disabled ? colors.muted_text : colors.text);
     HGDIOBJ old = font_ ? SelectObject(info->hDC, font_.get()) : nullptr;
     UINT format = DT_SINGLELINE | DT_VCENTER | DT_CENTER;
-    if (info->itemState & ODS_NOACCEL)
+    if ((info->itemState & ODS_NOACCEL) && !AccessKeysAlwaysShown())
     {
         format |= DT_HIDEPREFIX;
     }

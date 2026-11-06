@@ -53,7 +53,6 @@ ThemePresetResult ParseThemePresets(std::wstring_view content, std::vector<Theme
 ThemePresetResult ReadThemePresets(const std::wstring& path, std::vector<ThemePreset>* presets);
 ThemePresetResult WriteThemePresets(const std::wstring& path, const std::vector<ThemePreset>& presets);
 
-bool MergeBuiltInThemePresets(std::vector<ThemePreset>* presets, std::wstring& active_name);
 const ThemePreset* FindThemePreset(const std::vector<ThemePreset>& presets, std::wstring_view name);
 
 }
