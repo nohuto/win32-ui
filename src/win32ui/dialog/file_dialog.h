@@ -16,6 +16,8 @@ struct FileDialogChoice
 {
     DWORD id = 0;
     const wchar_t* text = nullptr;
+    // shown only for file types whose filter lists this pattern or *.*
+    const wchar_t* file_pattern = nullptr;
 };
 
 struct FileDialogSpec

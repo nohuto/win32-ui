@@ -93,6 +93,95 @@ HRESULT AddChoices(IFileDialogCustomize* customize, const FileDialogSpec& spec)
     return SUCCEEDED(hr) ? customize->SetSelectedControlItem(kChoiceCombo, *spec.choice) : hr;
 }
 
+class ChoiceEvents final : public IFileDialogEvents
+{
+  public:
+    ChoiceEvents(IFileDialogCustomize* customize, std::span<const FileDialogChoice> choices, std::span<const COMDLG_FILTERSPEC> filters)
+        : customize_(customize), choices_(choices), filters_(filters)
+    {
+    }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** object) override
+    {
+        *object = iid == __uuidof(IUnknown) || iid == __uuidof(IFileDialogEvents) ? static_cast<IFileDialogEvents*>(this) : nullptr;
+        return *object ? S_OK : E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override
+    {
+        return 1;
+    }
+    ULONG STDMETHODCALLTYPE Release() override
+    {
+        return 1;
+    }
+    HRESULT STDMETHODCALLTYPE OnTypeChange(IFileDialog* dialog) override
+    {
+        UINT type = 0;
+        DWORD selected = 0;
+        if (FAILED(dialog->GetFileTypeIndex(&type)) || FAILED(customize_->GetSelectedControlItem(kChoiceCombo, &selected)))
+        {
+            return S_OK;
+        }
+        for (const FileDialogChoice& choice : choices_)
+        {
+            customize_->SetControlItemState(kChoiceCombo, choice.id, Hidden(choice, type) ? CDCS_ENABLED : CDCS_ENABLEDVISIBLE);
+        }
+        // hidden selection moves to the closest shown choice before it
+        const auto at = std::ranges::find(choices_, selected, &FileDialogChoice::id);
+        if (at != choices_.end() && Hidden(*at, type))
+        {
+            for (auto shown = at; shown != choices_.begin();)
+            {
+                if (!Hidden(*--shown, type))
+                {
+                    customize_->SetSelectedControlItem(kChoiceCombo, shown->id);
+                    break;
+                }
+            }
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE OnFileOk(IFileDialog*) override
+    {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE OnFolderChanging(IFileDialog*, IShellItem*) override
+    {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE OnFolderChange(IFileDialog*) override
+    {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE OnSelectionChange(IFileDialog*) override
+    {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE OnShareViolation(IFileDialog*, IShellItem*, FDE_SHAREVIOLATION_RESPONSE*) override
+    {
+        return E_NOTIMPL;
+    }
+    HRESULT STDMETHODCALLTYPE OnOverwrite(IFileDialog*, IShellItem*, FDE_OVERWRITE_RESPONSE*) override
+    {
+        return E_NOTIMPL;
+    }
+
+  private:
+    bool Hidden(const FileDialogChoice& choice, UINT type) const
+    {
+        if (!choice.file_pattern || type == 0 || type > filters_.size())
+        {
+            return false;
+        }
+        const std::wstring_view patterns = filters_[type - 1].pszSpec;
+        return patterns.find(choice.file_pattern) == std::wstring_view::npos && patterns.find(L"*.*") == std::wstring_view::npos;
+    }
+
+    IFileDialogCustomize* customize_;
+    std::span<const FileDialogChoice> choices_;
+    std::span<const COMDLG_FILTERSPEC> filters_;
+};
+
 DWORD ShowFileDialog(HWND owner, FileDialogKind kind, const FileDialogSpec& spec, std::wstring* path)
 {
     if (!path || (spec.choice && std::none_of(spec.choices.begin(), spec.choices.end(), [&](const FileDialogChoice& choice) { return choice.id == *spec.choice; })))
@@ -124,9 +213,17 @@ DWORD ShowFileDialog(HWND owner, FileDialogKind kind, const FileDialogSpec& spec
             return Win32FromHResult(hr);
         }
     }
+    ChoiceEvents events(customize.get(), spec.choices, filters);
+    DWORD cookie = 0;
+    const bool typed = customize && std::ranges::any_of(spec.choices, [](const FileDialogChoice& choice) { return choice.file_pattern != nullptr; }) &&
+                       SUCCEEDED(dialog.get()->Advise(&events, &cookie));
     {
         const ModalScope modal(CloseFileDialog, dialog.get());
         hr = dialog.get()->Show(owner);
+    }
+    if (typed)
+    {
+        dialog.get()->Unadvise(cookie);
     }
     DWORD chosen = 0;
     if (SUCCEEDED(hr) && customize)

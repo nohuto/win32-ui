@@ -165,10 +165,10 @@ class PresetEditor final : public DialogWindow
                 return true;
             }
         case kPresetApplyId:
-            Apply();
+            Apply(true);
             return true;
         case IDOK:
-            Apply();
+            Apply(false);
             End(IDOK);
             return true;
         case kCopyCommand:
@@ -308,7 +308,12 @@ class PresetEditor final : public DialogWindow
         {
             return;
         }
-        preset->name = Unique(name, preset);
+        std::wstring renamed = Unique(name, preset);
+        if (EqualsInsensitive(preset->name, active_name_))
+        {
+            active_name_ = renamed;
+        }
+        preset->name = std::move(renamed);
         RefreshPresets();
     }
 
@@ -367,9 +372,10 @@ class PresetEditor final : public DialogWindow
         }
     }
 
-    void Apply()
+    void Apply(bool selected)
     {
-        if (const ThemePreset* preset = Selected())
+        const auto active = [this](const ThemePreset& preset) { return EqualsInsensitive(preset.name, active_name_); };
+        if (const ThemePreset* preset = Selected(); preset && (selected || std::ranges::none_of(presets_, active)))
         {
             active_name_ = preset->name;
         }

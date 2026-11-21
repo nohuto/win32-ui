@@ -519,8 +519,14 @@ void DialogWindow::InitTemplate()
         },
         reinterpret_cast<LPARAM>(&from_template)
     );
+    const bool resizable = (GetWindowLongPtrW(hwnd_, GWL_STYLE) & WS_THICKFRAME) != 0;
     OnCreate();
     created_ = true;
+    if (!resizable && (GetWindowLongPtrW(hwnd_, GWL_STYLE) & WS_THICKFRAME))
+    {
+        GetSystemMenu(hwnd_, FALSE);
+        GetSystemMenu(hwnd_, TRUE);
+    }
     FinishControls(from_template);
     ApplyTheme(hwnd_);
     Relayout();
@@ -723,6 +729,11 @@ void DialogWindow::ApplyFonts(HFONT previous)
 
 void DialogWindow::Relayout()
 {
+    // W10 sends WM_DPICHANGED before WM_INITDIALOG, layouts need the controls from OnCreate
+    if (!created_)
+    {
+        return;
+    }
     RECT client = {};
     GetClientRect(hwnd_, &client);
     OnLayout(client.right - client.left, client.bottom - client.top);
