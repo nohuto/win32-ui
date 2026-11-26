@@ -69,8 +69,6 @@ class TextPromptDialog final : public DialogWindow
         const DWORD style = WS_TABSTOP | (multiline_ ? ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL : ES_AUTOHSCROLL);
         edit_ = CreateControl(hwnd(), WC_EDITW, L"", style, kEditId);
         SendMessageW(edit_, EM_SETLIMITTEXT, 0, 0);
-        SetWindowTextW(edit_, text_.c_str());
-        SendMessageW(edit_, EM_SETSEL, 0, -1);
         SetAccessibleName(edit_, label_);
         if (!multiline_)
         {
@@ -109,6 +107,12 @@ class TextPromptDialog final : public DialogWindow
         const int one_line_buttons = y + TextPx(kControlHeight) + gap;
         const int buttons_top = multiline_ ? std::max(one_line_buttons, height - bottom_margin - button_height) : one_line_buttons;
         Place(edit_, margin, y, text_width, buttons_top - gap - y);
+        if (!initialized_)
+        {
+            initialized_ = true;
+            SetWindowTextW(edit_, text_.c_str());
+            SendMessageW(edit_, EM_SETSEL, 0, -1);
+        }
         PlaceButtonRow({ok_, cancel_}, right, buttons_top, button_min, button_height, Px(kButtonGap));
         Place(browse_button_, margin, buttons_top, browse_width, button_height);
         if (!multiline_)
@@ -159,6 +163,7 @@ class TextPromptDialog final : public DialogWindow
     std::wstring title_;
     std::wstring label_;
     bool multiline_ = false;
+    bool initialized_ = false;
     bool (*browse_)(void* context, HWND owner, std::wstring* line) = nullptr;
     void* context_ = nullptr;
     std::wstring text_;
